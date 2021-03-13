@@ -107,19 +107,20 @@ class VillainousState(GameState):
             for action in player.board_position.available_actions():
                 if action not in self.actions_used:
                     actions_remaining.append(action)
-            for action in actions_remaining:
-                moves.append(Move(action))
-                continue
-            
-                if type(action) is PlayCardAction:
-                    # TODO: adjust "card not in moves" logic and expand for ally/targeted cards
-                    
+            for action in actions_remaining:       
+                if type(action) is PlayCardAction and False:                    
                     for card in player.hand:       
                         if card.cost <= player.power:
-                            pass
+                            if card.targeted:
+                                print("TODO: targeted card actions")
+                            else:
+                                if card.card_type == CardType.EFFECT:
+                                    moves.append(PlayCardMove(card, action))
                         
-                if type(action) is MoveAllyAction:
-                    pass
+                else:
+                    moves.append(Move(Action))
+                    
+                
                     
         return moves
     
@@ -494,7 +495,12 @@ class BoardZone:
         if len(self.heroes) > 0:
             return copy(self.actions)
         return copy(self.actions) + copy(self.actions_blockable)
+    
+    def __eq__(self, other):
+        return self.number == other.number and self.name == other.name
         
+    def __ne_(self ,other):
+        return self.number != other.number or self.name != other.name
 
 class CardType:
     EFFECT = 1

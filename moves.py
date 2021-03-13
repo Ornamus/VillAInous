@@ -39,12 +39,25 @@ class MoveZoneMove(Move):
 
 class PlayCardMove(Move):
 
-    def __init__(self, card, parent_action):
-        super().__init__(self, parent_action)
+    def __init__(self, card, parent_action, zone=None, target=None):
+        super().__init__(parent_action)
         self.card = card
+        self.zone = zone
+        self.target = target
     
     def perform(self, game_state, player):
-        player.board_position = zone
+        if self.card.card_type is CardType.EFFECT or self.card.card_type is CardType.CONDITION:
+            self.deck_discard.append(self.card)
+        player.hand.remove(self.card)
+        player.power -= self.card.cost
+        self.card.play(player, game_state, zone=zone)
         
     def __str__(self):
         return "Play card {self.card.name}"
+        
+    def __eq__(self, other):
+        return self.card == other.card and self.zone == other.zone and self.target == other.target
+        
+    def __ne__(self, other):
+        return self.card != other.card or self.zone != other.zone or self.target != other.target
+    
