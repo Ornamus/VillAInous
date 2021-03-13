@@ -1,9 +1,152 @@
 from copy import copy, deepcopy
 from enum import Enum
+from moves import *
 import random
-import maleficent
+from monte import GameState, PlayGame, KnockoutWhistState
 
 VERBOSE_LOG = False
+
+class VillainousState(GameState):
+    
+    MOVE_ZONE_PHASE = 0
+    ACTION_PHASE = 1
+    
+    def __init__(self, players):
+        """ Initialise the game state. n is the number of players (from 2 to 7).
+        """
+        self.numberOfPlayers = len(players)
+        self.playerToMove = 0            
+        self.players = players
+        self.actions_used = []
+        self.phase = self.MOVE_ZONE_PHASE
+        self.turn = 1
+    
+    def Clone(self):
+        """ Create a deep clone of this game state.
+        """
+        st = VillainousState(deepcopy(self.players))
+        st.playerToMove = self.playerToMove
+        #st.players = deepcopy(self.players)
+        st.actions_used = deepcopy(self.actions_used)
+        st.phase = self.phase
+        st.turn = self.turn
+        return st
+    
+    def CloneAndRandomize(self, observer):
+        """ Create a deep clone of this game state, randomizing any information not visible to the specified observer player.
+        """
+        st = self.Clone()             
+        
+        # The observer can see their own hand and their discard pile, so the only unknown is how their deck is shuffled  
+        random.shuffle(st.players[observer].deck)
+        
+        for player in st.players:
+            if player != st.players[observer]:
+                unseenCards = player.deck + player.hand
+                random.shuffle(unseenCards)
+                numCards = len(player.hand)
+                # The first numCards unseen cards are the new hand
+                player.hand = unseenCards[:numCards]
+                # The rest are the new deck
+                player.deck = unseenCards[numCards:]                
+        
+        return st
+    
+    def GetNextPlayer(self, p):
+        """ Return the player to the left of the specified player """
+        next = p + 1
+        if next == self.numberOfPlayers:
+            next = 0
+        #print(f"({self.numberOfPlayers} players)  Player after {p}: {next}")
+        return next
+    
+    def DoMove(self, move):
+        """ Update a state by carrying out the given move.
+            Must update playerToMove.
+        """
+        
+        #print(f"Turn {self.turn}, Doing move: {move}")
+        player = self.players[self.playerToMove]
+        move.perform(self, player)
+        if move.parent_action is not None:
+            self.actions_used.append(move.parent_action)
+
+        if self.phase == self.MOVE_ZONE_PHASE:  
+            if type(move) is MoveZoneMove:
+                player.can_stay_on_zone = False
+                for action in [a for a in player.board_position.available_actions() if type(a) is PowerAction]:
+                    player.power += action.power
+                    self.actions_used.append(action)
+                self.phase = self.ACTION_PHASE               
+        elif self.phase == self.ACTION_PHASE:
+            if self.GetMoves() == []:
+                # Out of moves, this player's turn is over
+                self.playerToMove = self.GetNextPlayer(self.playerToMove)
+                self.phase = self.MOVE_ZONE_PHASE
+                self.actions_used = []
+                self.turn += 1
+    
+    def GetMoves(self):
+        """ Get all possible moves from this state.
+        """
+        moves = []
+        # Return empty moves if the game is over
+        for player in self.players:
+            if player.has_won():
+                return moves
+        
+        player = self.players[self.playerToMove]
+        if self.phase == self.MOVE_ZONE_PHASE:
+            #print("Doing zone moves")
+            for zone in player.available_zones():
+                moves.append(MoveZoneMove(zone))
+          
+        elif self.phase == self.ACTION_PHASE:
+            #print("Doing action phase moves")
+            actions_remaining = []
+            for action in player.board_position.available_actions():
+                if action not in self.actions_used:
+                    actions_remaining.append(action)
+            for action in actions_remaining:
+                moves.append(Move(action))
+                continue
+            
+                if type(action) is PlayCardAction:
+                    # TODO: adjust "card not in moves" logic and expand for ally/targeted cards
+                    
+                    for card in player.hand:       
+                        if card.cost <= player.power:
+                            pass
+                        
+                if type(action) is MoveAllyAction:
+                    pass
+                    
+        return moves
+    
+    def GetResult(self, player):
+        """ Get the game result from the viewpoint of player. 
+        """
+        return 1 if self.players[player].has_won() else 0
+    
+    def __str__(self):
+        result = f"Turn {self.turn} | {self.players[self.playerToMove].identifier}'s Turn "
+        for player in self.players:
+            result += f"| {player.identifier} - {player.power} power "
+        return result
+        
+    def __repr__(self):
+        """ Return a human-readable representation of the state
+        """
+        return str(self)
+        result  = "Round %i" % self.tricksInRound
+        result += " | P%i: " % self.playerToMove
+        result += ",".join(str(card) for card in self.playerHands[self.playerToMove])
+        result += " | Tricks: %i" % self.tricksTaken[self.playerToMove]
+        result += " | Trump: %s" % self.trumpSuit
+        result += " | Trick: ["
+        result += ",".join(("%i:%s" % (player, card)) for (player, card) in self.currentTrick)
+        result += "]"
+        return result
 
 class GameState:
 
@@ -115,10 +258,14 @@ class PlayerState:
     def __init__(self, identifier, villian, agent=Agent()):
         print(f"Player init: {identifier}")
         board_array = [
-            [[MoveAllyAction(), PlayCardAction()], [PowerAction(1), FateAction()]],
-            [[PowerAction(2), MoveAllyAction()], [PlayCardAction(), DiscardAction()]],
-            [[DiscardAction(), PlayCardAction()], [PowerAction(3), PlayCardAction()]],
-            [[PowerAction(1), FateAction()], [VanquishAction(), PlayCardAction()]],
+            [[], [PowerAction(1), FateAction(), MoveAllyAction()]],
+            [[], [PowerAction(2), FateAction(), PlayCardAction()]],
+            [[], [PowerAction(3), FateAction(), DiscardAction]],
+            [[], [PowerAction(4), FateAction()]],
+            #[[MoveAllyAction(), PlayCardAction()], [PowerAction(1), FateAction()]],
+            #[[PowerAction(2), MoveAllyAction()], [PlayCardAction(), DiscardAction()]],
+            #[[DiscardAction(), PlayCardAction()], [PowerAction(3), PlayCardAction()]],
+            #[[PowerAction(1), FateAction()], [VanquishAction(), PlayCardAction()]],
         ]
         self.identifier = identifier
         self.hand = []
@@ -161,7 +308,7 @@ class PlayerState:
         self.turn_record.append(f"Have {self.power} power")
         if game_state.turn > 1:
             if not predetermined_actions:
-                options = self.available_positions()
+                options = self.available_zones()
                 self.board_position = self.agent.pick_zone(options, self, game_state)
                 move_action = MovePlayerAction()
                 move_action.choice = self.board_position
@@ -189,7 +336,7 @@ class PlayerState:
         self.all_turn_records.append(self.turn_record)
         self.all_actions_performed.append(self.actions_performed)
     
-    def available_positions(self):
+    def available_zones(self):
         positions = []
         for zone in self.board:
             if (zone.number != self.board_position.number or self.can_stay_on_zone) and not zone.locked:
@@ -380,6 +527,12 @@ class Card:
 
     def __str__(self):
         return f"{self.name} ({self.cost})"
+        
+    def __eq__(self, other):
+        return self.name == other.name and self.cost == other.cost and self.card_type == other.card_type
+
+    def __ne__(self, other):
+        return self.name != other.name or self.cost != other.cost or self.card_type != other.card_type
 
 class CharacterType:
     ALLY = 1
@@ -397,7 +550,6 @@ class Character:
             pass
         return self.strength
 
-
 class Action:
 
     def __init__(self):
@@ -412,6 +564,12 @@ class Action:
         else:
             return f"{type(self)}"
 
+    def __eq__(self, other):
+        return type(self) is type(other)
+        
+    def __ne__(self, other):
+        return type(self) is not type(other)
+
 class MovePlayerAction(Action):
 
     def activate(self, player, game_state):
@@ -421,11 +579,9 @@ class MovePlayerAction(Action):
             print("MovePlayerAction activated with None choice, warning!")
 
     def  __str__(self):
-        return f"Move Player to zone {self.choice.number}"
+        return f"Move Player to zone {self.choice.number}"        
 
 class PowerAction(Action):
-    
-    power = 1
 
     def __init__(self, power):
         super().__init__()
@@ -439,6 +595,12 @@ class PowerAction(Action):
     def  __str__(self):
         return f"Gained {self.power} power"
 
+    def __eq__(self, other):
+        return type(self) is type(other) and self.power == other.power
+        
+    def __ne__(self, other):
+        return type(self) is not type(other) or self.power != other.power
+       
 class PlayCardAction(Action):
 
     def activate(self, player, game_state):
@@ -625,6 +787,14 @@ def get_best_simulation(starting_state, total_simulations=500, turn_depth=5):
 
 def main():
     # print("Villainous :)")
+    
+    players = []
+    for i in range(0, 2):
+        players.append(PlayerState("AI" if i == 0 else f"Opponent {i}", Villian()))
+    PlayGame(VillainousState(players))
+    #PlayGame(KnockoutWhistState(2))
+    return
+    
     random.seed(2)
     starting_state = GameState()
     ai = PlayerState("AI", maleficent.MaleficentVillian(), agent=MonteCarloAgent()) #Villian())
