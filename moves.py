@@ -110,11 +110,12 @@ class MoveAllyMove(Move):
         self.zone = zone.number
     
     def perform(self, game_state, player):
-        #print(f"Move ally from {self.prev_zone.number} to {self.zone.number}: {self.ally.name}")
-        #for ally in self.prev_zone.allies:
-            #print(f"In {self.prev_zone.number}: {ally.name}")
-        player.board[self.prev_zone].allies.remove(self.ally)
-        player.board[self.zone].allies.append(self.ally)
+        if self.ally.card_type == CardType.ALLY:
+            player.board[self.prev_zone].allies.remove(self.ally)
+            player.board[self.zone].allies.append(self.ally)
+        elif self.ally.card_type == CardType.ITEM:
+            player.board[self.prev_zone].items.remove(self.ally)
+            player.board[self.zone].items.append(self.ally)
         
     def __str__(self):
         return f"Move {self.ally.name} to zone {self.zone}"    

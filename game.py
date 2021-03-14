@@ -276,13 +276,6 @@ class Agent:
     def plan_whole_turn(self, player_state, game_state):
         return None
 
-    def take_actions(self, actions, player_state, game_state):
-        action_records = []
-        random.shuffle(actions)
-        for action in actions:
-            action_records.append(action.activate(player_state, game_state))
-        return action_records
-
     def pick_zone(self, options, player_state, game_state):
         return options[random.randint(0, len(options) - 1)]
 
@@ -376,7 +369,6 @@ class PlayerState:
         
         self.fate = deepcopy(Villain.generate_fate())
         random.shuffle(self.fate)
-        print(f"{self.identifier} fate length: {len(self.fate)}")
         
         for i in range(4):
             self.draw_card()
@@ -390,40 +382,6 @@ class PlayerState:
             self.board.append(zone)
         self.board_position = self.board[0]
         Villain.init(self)
-
-    def take_turn(self, game_state, predetermined_actions=None):
-        self.actions_performed = []
-        self.turn_record = []
-        self.turn_record.append(f"Have {self.power} power")
-        if game_state.turn > 1:
-            if not predetermined_actions:
-                options = self.available_zones()
-                self.board_position = self.agent.pick_zone(options, self, game_state)
-                move_action = MovePlayerAction()
-                move_action.choice = self.board_position
-                self.actions_performed.append(move_action)
-        else:
-            self.board_position = self.board[0]
-            
-        #self.turn_record.append(f"Moved to zone {self.board_position.number}")    
-        if self.can_stay_on_zone:
-            self.can_stay_on_zone = False
-        
-        if predetermined_actions:
-            for action in predetermined_actions:
-                action.activate(self, game_state)
-                self.actions_performed.append(action)
-        else:
-            action_list = self.board_position.available_actions()            
-            action_list_result = self.agent.take_actions(action_list, self, game_state)
-            for action in action_list_result:
-                self.actions_performed.append(action)
-        
-        while len(self.hand) < 4:
-            self.draw_card()
-        
-        self.all_turn_records.append(self.turn_record)
-        self.all_actions_performed.append(self.actions_performed)
     
     def available_zones(self):
         positions = []
@@ -524,50 +482,6 @@ class PlayerState:
         zone.allies.append(card_ally)
         self.turn_record.append(f"{card_ally.name} played to zone {zone.number}")
         return zone
-    
-    def vanquish_action(self, game_state, choice=-1):
-        if choice != -1:
-            if choice is None:
-                return None
-            zone = self.board[choice[0].number]
-            for hero_option in zone.heroes:
-                if hero_option.name == choice[1].name and len(hero_option.card_ally.items) == len(choice[1].card_ally.items): # todo: item matching
-                    hero = hero_option
-                    break
-            allies = []
-            for ally in choice[2]:
-                for ally_option in zone.allies:
-                    if ally_option.name == ally.name and len(ally_option.card_ally.items) == len(ally.card_ally.items) and ally not in allies: # todo: item matching
-                        allies.add(ally)
-                        
-            vanquish = (zone, hero, allies)
-        else:
-            defeatable = []
-            for zone in self.board:
-                if len(zone.allies) > 0 and len(zone.heroes) > 0:
-                    allies_copy = copy(zone.allies)
-                    random.shuffle(allies_copy)
-                    for hero in zone.heroes:
-                        allies_needed = []
-                        for ally in allies_copy:
-                            allies_needed.append(ally)
-                            strength_sum = 0
-                            for ally in allies_needed:
-                                strength_sum += ally.card_ally.get_total_strength(zone)
-                            if strength_sum >= hero.card_ally.get_total_strength(zone):
-                                defeatable.append((zone, hero, allies_needed))
-                                break
-            if len(defeatable) == 0:
-                return None
-
-            vanquish = self.agent.pick_vanquish(defeatable, self, game_state)
-            
-        vanquish[0].heroes.remove(vanquish[1])
-        self.fate_discard.append(vanquish[1])
-        for ally in vanquish[2]:
-            vanquish[0].allies.remove(ally)
-            self.deck_discard.append(ally)
-        return vanquish
         
     def add_power(self, power):
         self.power += power
@@ -599,9 +513,14 @@ class BoardZone:
     def available_actions(self):
         if self.locked:
             return []
+        item_bonus = []
+        for item in self.items:
+            item_bonus.extend(item.actions_granted)
+        #for action in item_bonus:
+            #print(f"Bonus Action: {action}")
         if len(self.heroes) > 0:
-            return copy(self.actions)
-        return copy(self.actions) + copy(self.actions_blockable)
+            return self.actions + item_bonus
+        return self.actions + self.actions_blockable + item_bonus
     
     def __eq__(self, other):
         if self is None and other is None:
@@ -634,6 +553,7 @@ class Card:
         self.card_ally = None
         self.targeted = False
         self.target_set = lambda: []
+        self.actions_granted = []
         self.fate = False
         
     def play(self, player, game_state, target=None, zone=None):
@@ -693,9 +613,6 @@ class Action:
     def __init__(self, number=0):
         self.choice = -1
         self.number = number
-    
-    def activate(self, player, game_state):
-        pass
 
     def __str__(self):
         if self.choice:
@@ -711,14 +628,8 @@ class Action:
 
 class MovePlayerAction(Action):
 
-    def activate(self, player, game_state):
-        if self.choice:
-            player.board_position = self.choice
-        else:
-            print("MovePlayerAction activated with None choice, warning!")
-
     def  __str__(self):
-        return f"Move Player to zone {self.choice.number}"        
+        return f"Move Player Action"        
 
 class PowerAction(Action):
 
@@ -726,123 +637,39 @@ class PowerAction(Action):
         super().__init__()
         self.power = power
 
-    def activate(self, player, game_state):
-        player.turn_record.append(f"Gained {self.power} power")
-        player.power += self.power
-        return self
-
     def  __str__(self):
-        return f"Gained {self.power} power"
+        return f"{self.power} Power Action"
 
     def __eq__(self, other):
-        return type(self) is type(other) and self.power == other.power
+        return super().__eq__(other) and self.power == other.power
         
     def __ne__(self, other):
-        return type(self) is not type(other) or self.power != other.power
+        return super().__ne__(other) or self.power != other.power
        
 class PlayCardAction(Action):
-
-    def activate(self, player, game_state):
-        if len(player.hand) == 0:
-            return self
-        record = copy(self)
-        card, zone = player.play_card(game_state, choice=self.choice)
-        record = copy(self)
-        record.choice = (card, zone)
-        return record
     
     def  __str__(self):
-        if self.choice != -1:
-            if self.choice[1]:
-                return f"Play Card: {self.choice[0]} to zone {self.choice[1].number}"
-            else:
-                return f"Play Card: {self.choice[0]}"
-        else:
-            return "Skipped Play Card"
+        return "Play Card Action"
 
 class DiscardAction(Action):
 
-    def activate(self, player, game_state):
-        if len(player.hand) == 0:
-            return self      
-        record = copy(self)
-        record.choice = player.discard_action(game_state, choice=self.choice)
-        return record
-
     def  __str__(self):
-        if self.choice:
-            return f"Discarded {len(self.choice)} cards"
-        else:
-            return "Discarded no cards"
+        return "Discard Action"
 
 class VanquishAction(Action):
-    
-    def activate(self, player, game_state):
-        record = copy(self)
-        record.choice = player.vanquish_action(game_state, choice=self.choice)
-        return record
-        
-    def  __str__(self):
-        if self.choice:
-            return f"Vanquished {self.choice[1]}?"
-        else:
-            return "Skipped vanquish"
+           
+    def  __str__(self):      
+        return "Vanquish Action"
            
 class FateAction(Action):
 
-    def activate(self, player, game_state):
-        player.turn_record.append(f"Fated")   
-        return self
-
     def  __str__(self):
-        return "Fated"        
+        return "Fate Action"        
     
 class MoveAllyAction(Action):
 
-    def activate(self, player, game_state):
-        zones_with_allies = []
-        for zone in player.board:
-            if len(zone.allies) > 0: # or len(zone.items) > 0
-                zones_with_allies.append(zone)
-        if len(zones_with_allies) == 0:
-            return self
-            
-        if self.choice != -1:
-            #if self.choice[0] is None or self.choice[1] is None or self.choice[2] is None:
-                #return self
-            ally = None
-            zone = player.board[self.choice[1].number]
-            for ally_option in zone.allies:
-                print(ally_option.name)
-                if ally_option.card_ally is None:
-                    print(f"[WARNING] {ally_option.name} has no card_ally")
-                if ally_option.name == self.choice[0].name and len(ally_option.card_ally.items) == len(self.choice[0].card_ally.items):
-                    ally = ally_option
-                    break
-            dest_zone = player.board[self.choice[2].number]
-            if ally == None:
-                print("Ally was not set when it should've been")
-                return self
-        else:
-            ally, zone, dest_zone = player.agent.pick_move_ally(zones_with_allies, player, game_state)
-            if not zone or not ally or not dest_zone:
-                return self
-        zone.allies.remove(ally)
-        dest_zone.allies.append(ally)
-        player.turn_record.append(f"Move {ally.name} zone: {zone.number} -> {dest_zone.number}")
-        
-        record = copy(self)
-        record.choice = (ally, zone, dest_zone)
-        return record
-
     def  __str__(self):
-        if self.choice != -1:
-            ally = self.choice[0]
-            zone = self.choice[1]
-            dest = self.choice[2]
-            return f"Move Ally {ally}: Zone {zone.number} -> zone {dest.number}"
-        else:
-            return "Skipped Move Ally"
+        return "Move Ally"
 
 def unlock_the_magic(p, gs):
     if p.board[3].locked:
@@ -855,6 +682,7 @@ def unlock_the_magic(p, gs):
                 hero = zone.heroes[0]
                 zone.heroes.remove(hero)
                 p.fate_discard.append(hero)
+                return
 
 class Villain:
     
@@ -881,6 +709,10 @@ class Villain:
                 card.code = unlock_the_magic
             if card:
                 deck.append(card)
+        for i in range(1, 7):
+            card = Card(2, "Cannon", CardType.ITEM)
+            card.actions_granted.append(VanquishAction(number=-i))
+            deck.append(card)
         return deck
     
     def generate_fate(self):

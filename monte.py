@@ -387,9 +387,9 @@ def PlayGame(game_state):
         print(str(state))
         # Use different numbers of iterations (simulations, tree nodes) for different players
         if state.playerToMove == 0:
-            m, node = ISMCTS(rootstate = state, itermax = 1000, verbose = False)
+            m, node = ISMCTS(rootstate = state, itermax = 500, verbose = False)
         else:
-            m, node = ISMCTS(rootstate = state, itermax = 1000, verbose = False)
+            m, node = ISMCTS(rootstate = state, itermax = 100, verbose = False)
         #print("Best Move: " + str(m) + "\n")
         print(f"Best Move: {m} ({(node.wins/node.visits)*100:.1f}%)\n")
         state.DoMove(m)
