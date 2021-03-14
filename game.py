@@ -5,6 +5,7 @@ import random
 import collections
 from monte import GameState, PlayGame, KnockoutWhistState
 from itertools import chain, combinations
+import hook
 
 VERBOSE_LOG = False
 
@@ -28,6 +29,7 @@ class VillainousState(GameState):
         self.playerToMove = 0            
         self.players = players
         self.actions_used = []
+        self.interrupt_moves = []
         self.phase = self.ACTION_PHASE if game_init else self.MOVE_ZONE_PHASE
         self.turn = 1
         if game_init:
@@ -52,6 +54,7 @@ class VillainousState(GameState):
         st = VillainousState(deepcopy(self.players), game_init=False)
         st.playerToMove = self.playerToMove
         st.actions_used = deepcopy(self.actions_used)
+        st.interrupt_moves = deepcopy(self.interrupt_moves)
         st.phase = self.phase
         st.turn = self.turn
         for player in self.players:
@@ -103,6 +106,8 @@ class VillainousState(GameState):
         move.perform(self, player)
         if move.parent_action is not None:
             self.actions_used.append(move.parent_action)
+        if move in self.interrupt_moves:
+            self.interrupt_moves.clear()
         
         did_move_phase = False
         if self.phase == self.MOVE_ZONE_PHASE:  
@@ -142,6 +147,9 @@ class VillainousState(GameState):
             if player.has_won():
                 return moves
         
+        if len(self.interrupt_moves) > 0:
+            return self.interrupt_moves
+        
         player = self.players[self.playerToMove]
         if self.phase == self.MOVE_ZONE_PHASE:
             for zone in player.available_zones():
@@ -166,9 +174,13 @@ class VillainousState(GameState):
                                     moves.append(PlayCardMove(card, action))
                                 elif card.card_type != CardType.CONDITION:
                                     # Get every open zone to play an Ally or Item to
-                                    zones = [zone for zone in player.board if not zone.locked]
+                                    zones = [zone for zone in player.board if not zone.locked or card.fate]
                                     for zone in zones:
-                                        moves.append(PlayCardMove(card, action, zone=zone))
+                                        if card.equip:
+                                            for ally in zone.heroes if card.fate else zone.allies:
+                                                moves.append(PlayCardMove(card, action, target=ally, zone=zone))
+                                        else:
+                                            moves.append(PlayCardMove(card, action, zone=zone))
                 elif type(action) is DiscardAction:   
                     # Get every possible combination of cards to discard
                     for cards in powerset(player.hand):
@@ -216,6 +228,9 @@ class VillainousState(GameState):
             if len(moves) > 0 or player.first_turn:
                 moves.append(EndTurnMove())
         return moves
+    
+    def AddInterruptMoves(self, moves):
+        self.interrupt_moves = moves
     
     def GetResult(self, player):
         """ Get the game result from the viewpoint of player. 
@@ -348,6 +363,8 @@ class PlayerState:
         self.deck_discard = []
         #self.fate = []
         self.fate_discard = []
+        
+        self.vanquish_history = []
         
         self.power = 0
         self.board_position = None
@@ -554,6 +571,8 @@ class Card:
         self.targeted = False
         self.target_set = lambda: []
         self.actions_granted = []
+        self.equip = False
+        self.strength_bonus = 0
         self.fate = False
         
     def play(self, player, game_state, target=None, zone=None):
@@ -564,9 +583,17 @@ class Card:
                 else:
                     self.code(player, game_state)
         elif self.card_type == CardType.ITEM:
-            zone.items.append(self)
+            if self.equip: # and target.card_ally:
+                target.card_ally.items.append(self)
+            else:
+                zone.items.append(self)
+                if self.code is not None:
+                    self.code(player, game_state)
         elif not self.card_type == CardType.CONDITION:
-            zone.allies.append(self)
+            if self.fate:
+                zone.heroes.append(self)
+            else:
+                zone.allies.append(self)
         elif self.card_type == CardType.CONDITION:
             pass
         else:
@@ -598,9 +625,10 @@ class Character:
         self.adjacent_vanquish = False
     
     def get_total_strength(self, zone):
+        strength = self.strength
         for item in self.items:
-            pass
-        return self.strength
+            strength += item.strength_bonus
+        return strength
 
     def __eq__(self, other):
         return type(self) is type(other) and self.strength == other.strength and self.card_ally_type == other.card_ally_type and collections.Counter(self.items) == collections.Counter(other.items)
@@ -633,8 +661,8 @@ class MovePlayerAction(Action):
 
 class PowerAction(Action):
 
-    def __init__(self, power):
-        super().__init__()
+    def __init__(self, power, number=0):
+        super().__init__(number=number)
         self.power = power
 
     def  __str__(self):
@@ -671,6 +699,11 @@ class MoveAllyAction(Action):
     def  __str__(self):
         return "Move Ally"
 
+class MoveHeroAction(Action):
+
+    def __str__(self):
+        return "Move Hero"
+        
 def unlock_the_magic(p, gs):
     if p.board[3].locked:
         p.board[3].locked = False
@@ -749,7 +782,7 @@ def main():
     
     players = []
     for i in range(0, 3):
-        players.append(PlayerState("AI" if i == 0 else f"Opponent {i}", Villain()))
+        players.append(PlayerState("AI" if i == 0 else f"Opponent {i}", hook.CaptainHook()))#Villain()))
     PlayGame(VillainousState(players))
     return
     

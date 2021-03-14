@@ -1,4 +1,3 @@
-from game import CardType, PowerAction
 import collections
 from collections.abc import Iterable
 
@@ -57,10 +56,15 @@ class PlayCardMove(Move):
         self.target = target
     
     def perform(self, game_state, player):
+        from game import CardType
         if self.card.card_type is CardType.EFFECT or self.card.card_type is CardType.CONDITION:
-            player.deck_discard.append(self.card)
-        player.hand.remove(self.card)
-        player.power -= self.card.cost
+            if self.card.fate:
+                player.fate_discard.append(self.card)
+            else:
+                player.deck_discard.append(self.card)
+        if not self.card.fate:
+            player.hand.remove(self.card)
+            player.power -= self.card.cost
         self.card.play(player, game_state, target=self.target, zone=player.board[self.zone.number] if self.zone else None)
         
     def __str__(self):
@@ -110,6 +114,7 @@ class MoveAllyMove(Move):
         self.zone = zone.number
     
     def perform(self, game_state, player):
+        from game import CardType
         if self.ally.card_type == CardType.ALLY:
             player.board[self.prev_zone].allies.remove(self.ally)
             player.board[self.zone].allies.append(self.ally)
@@ -135,11 +140,14 @@ class VanquishMove(Move):
         self.zone = zone.number        
 
     def perform(self, game_state, player):
+        from game import PowerAction
+
         for ally in self.allies:
             player.board[self.zone].allies.remove(ally)     
             player.deck_discard.append(ally)
         player.board[self.zone].heroes.remove(self.hero)
         player.fate_discard.append(self.hero)
+        player.vanquish_history.append(self.hero)
         
         if len(player.board[self.zone].heroes) == 0:
             for action in player.board[self.zone].actions_blockable:
@@ -169,6 +177,7 @@ class FateMove(Move):
         self.target_player_index = target_player
     
     def perform(self, game_state, player):
+        from game import CardType
         target_player = game_state.players[self.target_player_index]    
         fate_card = target_player.get_fate_card()
         target_player.fate_discard.append(target_player.get_fate_card())           
