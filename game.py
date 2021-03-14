@@ -2,6 +2,7 @@ from copy import copy, deepcopy
 from enum import Enum
 from moves import *
 import random
+import collections
 from monte import GameState, PlayGame, KnockoutWhistState
 from itertools import chain, combinations
 
@@ -48,15 +49,14 @@ class VillainousState(GameState):
     def Clone(self):
         """ Create a deep clone of this game state.
         """
-        #players_copy = []
-        #for player in self.players:
-            #players_copy.append(deepcopy(player))
         st = VillainousState(deepcopy(self.players), game_init=False)
         st.playerToMove = self.playerToMove
         st.actions_used = deepcopy(self.actions_used)
         st.phase = self.phase
         st.turn = self.turn
-        #for player in self.players:
+        for player in self.players:
+            player.fate = deepcopy(player.fate)
+            player.fate_discard = deepcopy(player.fate_discard)
             #player.hand = deepcopy(player.hand)
             #player.deck = deepcopy(player.deck)
             #player.deck_discard = deepcopy(player.deck_discard)
@@ -69,23 +69,20 @@ class VillainousState(GameState):
         #print(f"Randomizing from {observer}'s perspective")
         # The observer can see their own hand and their discard pile, so the only unknown is how their deck is shuffled  
         random.shuffle(st.players[observer].deck)
+        random.shuffle(st.players[observer].fate)
         
         for player in st.players:
             if player != st.players[observer]:
                 #print(f"Shuffling data for {player.identifier}")
-                changeHands = True
-                if changeHands:
-                    unseenCards = deepcopy(player.deck) + deepcopy(player.hand)
-                    random.shuffle(unseenCards)
-                    numCards = len(player.hand)
-                    # The first numCards unseen cards are the new hand
-                    player.hand = deepcopy(unseenCards[:numCards])
-                    # The rest are the new deck
-                    player.deck = deepcopy(unseenCards[numCards:])      
-                else:
-                    unseenCards = player.deck
-                    random.shuffle(unseenCards)
-                    player.deck = unseenCards
+                unseenCards = deepcopy(player.deck) + deepcopy(player.hand)
+                random.shuffle(unseenCards)
+                numCards = len(player.hand)
+                # The first numCards unseen cards are the new hand
+                player.hand = deepcopy(unseenCards[:numCards])
+                # The rest are the new deck
+                player.deck = deepcopy(unseenCards[numCards:])   
+                random.shuffle(player.fate)
+
         
         return st
     
@@ -164,14 +161,54 @@ class VillainousState(GameState):
                                 for target in targets:
                                     if card.card_type == CardType.EFFECT:
                                         moves.append(PlayCardMove(card, action, target=target))
-                            else:
+                            else:                               
                                 if card.card_type == CardType.EFFECT:
                                     moves.append(PlayCardMove(card, action))
+                                elif card.card_type != CardType.CONDITION:
+                                    # Get every open zone to play an Ally or Item to
+                                    zones = [zone for zone in player.board if not zone.locked]
+                                    for zone in zones:
+                                        moves.append(PlayCardMove(card, action, zone=zone))
                 elif type(action) is DiscardAction:   
                     # Get every possible combination of cards to discard
                     for cards in powerset(player.hand):
                         if len(cards) > 0:
                             moves.append(DiscardCardsMove(cards, action))
+                elif type(action) is MoveAllyAction:
+                    for zone in player.board:
+                        if zone.locked:
+                            continue
+                        for entity in (zone.allies + zone.items):
+                            if zone.number > 0 and not player.board[zone.number - 1].locked:
+                                moves.append(MoveAllyMove(entity, zone, player.board[zone.number - 1], action))
+                            if zone.number < 3 and not player.board[zone.number + 1].locked:
+                                moves.append(MoveAllyMove(entity, zone, player.board[zone.number + 1], action))
+                
+                elif type(action) is VanquishAction:
+                    for zone in player.board:
+                        if zone.locked:
+                            continue
+                        for hero in zone.heroes:
+                            valid_allies = zone.allies
+                            
+                            # TODO: need a way of tracking where these allies come from in the Move so that we can remove them properly
+                            #if zone.number > 0 and not player.board[zone.number - 1].locked:
+                            #    valid_allies.extend([ally for ally in player.board[zone.number - 1].allies if ally.card_ally.adjacent_vanquish])
+                            #if zone.number < 3 and not player.board[zone.number + 1].locked:
+                            #    valid_allies.extend([ally for ally in player.board[zone.number + 1].allies if ally.card_ally.adjacent_vanquish])
+                            
+                            for ally_set in powerset(valid_allies):
+                                total_strength = 0
+                                for ally in ally_set:
+                                    total_strength += ally.card_ally.get_total_strength(zone)
+                                if total_strength >= hero.card_ally.get_total_strength(zone):
+                                    moves.append(VanquishMove(ally_set, hero, zone, action))
+                
+                elif type(action) is FateAction:
+                    for i in range(0, self.numberOfPlayers):                   
+                        if i != self.playerToMove:
+                            moves.append(FateMove(i, action))
+                
                 elif type(action) is PowerAction:
                     continue
                 else:
@@ -186,9 +223,28 @@ class VillainousState(GameState):
         return 1 if self.players[player].has_won() else 0
     
     def __str__(self):
-        result = f"Turn {self.turn} | {self.players[self.playerToMove].identifier}'s Turn "
+        result = f"Turn {self.turn} | {self.players[self.playerToMove].identifier}'s Turn " + ("\n" if self.numberOfPlayers > 2 else "")
         for player in self.players:
-            result += f"| {player.identifier} - {player.power} power "
+            heroes = 0
+            allies = 0
+            zone_string = ""
+            for zone in player.board:
+                heroes += len(zone.heroes)
+                allies += len(zone.allies)
+                
+                hero_str = len(zone.heroes) if len(zone.heroes) > 0 else " "
+                ally_str = "A" if len(zone.allies) > 0 else " "
+                inside = f"{hero_str}{ally_str}"
+                #inside = len(zone.heroes) if len(zone.heroes) > 0 else " "
+                #inside = "A" if inside == " " and len(zone.allies) > 0 else inside
+                if zone.locked:
+                    zone_string += f"X{inside}X "
+                elif zone.number == player.board_position.number:
+                    zone_string += f"|{inside}| "
+                else:
+                    zone_string += f"[{inside}] "
+            result += f"| {player.identifier.ljust(10)} - p={player.power:2} d={len(player.deck):2} f={len(player.fate):2} h={heroes:2} a={allies:2}   {zone_string} " + ("\n" if self.numberOfPlayers > 2 else "")
+            
         return result
         
     def __repr__(self):
@@ -196,7 +252,7 @@ class VillainousState(GameState):
         """
         return str(self)
 
-def booty(p, gs):
+def gold_stash(p, gs):
     p.add_power(2)
 
 def sacrifice_targets(p, gs):
@@ -281,13 +337,13 @@ class MonteCarloAgent(Agent):
    
 class PlayerState:
        
-    def __init__(self, identifier, villian, agent=Agent()):
+    def __init__(self, identifier, Villain, agent=Agent()):
         print(f"Player init: {identifier}")
         board_array = [
-            [[], [PowerAction(1), MoveAllyAction(), PlayCardAction()]],
-            [[], [PowerAction(2), PlayCardAction()]],
-            [[], [PowerAction(2), DiscardAction()]],
-            [[], [PowerAction(4), DiscardAction(), PlayCardAction()]],
+            [[PlayCardAction(number=1), VanquishAction()], [PowerAction(1), PlayCardAction(number=0)]],
+            [[PlayCardAction(), PowerAction(2)],       [VanquishAction(), FateAction()]],
+            [[MoveAllyAction(), FateAction()],      [PowerAction(2), DiscardAction()]],
+            [[PowerAction(4), DiscardAction()], [MoveAllyAction(), PlayCardAction()]],
             #[[MoveAllyAction(), PlayCardAction()], [PowerAction(1), FateAction()]],
             #[[PowerAction(2), MoveAllyAction()], [PlayCardAction(), DiscardAction()]],
             #[[DiscardAction(), PlayCardAction()], [PowerAction(3), PlayCardAction()]],
@@ -295,16 +351,16 @@ class PlayerState:
         ]
         self.identifier = identifier
         self.hand = []
-        self.deck = []
+        #self.deck = []
         self.deck_discard = []
-        self.fate = []
+        #self.fate = []
         self.fate_discard = []
         
         self.power = 0
         self.board_position = None
         self.board = []
         
-        self.villian = villian
+        self.Villain = Villain
         self.agent = agent
         
         self.all_turn_records = []
@@ -315,8 +371,13 @@ class PlayerState:
         self.can_stay_on_zone = False
         self.first_turn = True
         
-        self.deck = deepcopy(villian.generate_deck())
+        self.deck = deepcopy(Villain.generate_deck())
         random.shuffle(self.deck)
+        
+        self.fate = deepcopy(Villain.generate_fate())
+        random.shuffle(self.fate)
+        print(f"{self.identifier} fate length: {len(self.fate)}")
+        
         for i in range(4):
             self.draw_card()
         for i in range(4):
@@ -328,7 +389,7 @@ class PlayerState:
                 zone.actions.append(action)
             self.board.append(zone)
         self.board_position = self.board[0]
-        villian.init(self)
+        Villain.init(self)
 
     def take_turn(self, game_state, predetermined_actions=None):
         self.actions_performed = []
@@ -372,10 +433,10 @@ class PlayerState:
         return positions
     
     def get_state_score(self):
-        return self.villian.get_score(self)
+        return self.Villain.get_score(self)
     
     def has_won(self):
-        return self.villian.has_won(self)
+        return self.Villain.has_won(self)
     
     def draw_card(self):
         if len(self.deck) == 0:
@@ -387,6 +448,17 @@ class PlayerState:
         card = self.deck[0]
         self.hand.append(card)
         self.deck.remove(card)
+
+    def get_fate_card(self):
+        if len(self.fate) == 0:
+            #print(f"Reshuffling fate for {self.identifier}. Discard size: {len(self.fate_discard)}")
+            self.fate = copy(self.fate_discard)           
+            #random.shuffle(self.fate)
+            self.fate_discard.clear()           
+        
+        card = self.fate[0]
+        self.fate.remove(card)  
+        return card        
 
     def play_card(self, game_state, choice=-1):
         zone = None
@@ -499,15 +571,17 @@ class PlayerState:
         
     def add_power(self, power):
         self.power += power
+        if self.power < 0:
+            self.power =0 
 
     def print_state(self):
         pass#print(f"Player {self.identifier}: {self.power} power, hand: {len(self.hand)}")
         
     def __eq__(self, other):
-        return self.identifier == other.identifier and self.power == other.power
+        return self.identifier == other.identifier# and self.power == other.power
     
     def __ne__(self, other):
-        return self.identifier != other.identifier or self.power != other.power
+        return self.identifier != other.identifier# or self.power != other.power
 
 class BoardZone:
     
@@ -560,6 +634,7 @@ class Card:
         self.card_ally = None
         self.targeted = False
         self.target_set = lambda: []
+        self.fate = False
         
     def play(self, player, game_state, target=None, zone=None):
         if self.card_type == CardType.EFFECT:
@@ -568,8 +643,10 @@ class Card:
                     self.code(target, player, game_state)
                 else:
                     self.code(player, game_state)
+        elif self.card_type == CardType.ITEM:
+            zone.items.append(self)
         elif not self.card_type == CardType.CONDITION:
-            return player.play_ally_card(self, game_state, zone=zone)
+            zone.allies.append(self)
         elif self.card_type == CardType.CONDITION:
             pass
         else:
@@ -580,10 +657,10 @@ class Card:
         return f"{self.name} ({self.cost})"
         
     def __eq__(self, other):
-        return self.name == other.name and self.cost == other.cost and self.card_type == other.card_type
+        return self.name == other.name and self.cost == other.cost and self.card_type == other.card_type and self.card_ally == other.card_ally
 
     def __ne__(self, other):
-        return self.name != other.name or self.cost != other.cost or self.card_type != other.card_type
+        return self.name != other.name or self.cost != other.cost or self.card_type != other.card_type or self.card_ally != other.card_ally
 
     def __hash__(self):
         return hash((self.name, self.cost, self.card_type))
@@ -598,16 +675,24 @@ class Character:
         self.card_ally_type = character_type
         self.strength = strength      
         self.items = []
+        self.adjacent_vanquish = False
     
     def get_total_strength(self, zone):
         for item in self.items:
             pass
         return self.strength
 
+    def __eq__(self, other):
+        return type(self) is type(other) and self.strength == other.strength and self.card_ally_type == other.card_ally_type and collections.Counter(self.items) == collections.Counter(other.items)
+
+    def __ne__(self, other):
+        return type(self) is not type(other) or  self.strength != other.strength or self.card_ally_type != other.card_ally_type or collections.Counter(self.items) != collections.Counter(other.items)
+ 
 class Action:
 
-    def __init__(self):
+    def __init__(self, number=0):
         self.choice = -1
+        self.number = number
     
     def activate(self, player, game_state):
         pass
@@ -619,10 +704,10 @@ class Action:
             return f"{type(self)}"
 
     def __eq__(self, other):
-        return type(self) is type(other)
+        return type(self) is type(other) and self.number == other.number
         
     def __ne__(self, other):
-        return type(self) is not type(other)
+        return type(self) is not type(other) or self.number != other.number
 
 class MovePlayerAction(Action):
 
@@ -760,10 +845,18 @@ class MoveAllyAction(Action):
             return "Skipped Move Ally"
 
 def unlock_the_magic(p, gs):
-    p.board[3].locked = False
-    p.power *= 2
+    if p.board[3].locked:
+        p.board[3].locked = False
+    else:
+        p.power += 7
+        for i in range(3, -1, -1):
+            zone = p.board[i]
+            if len(zone.heroes) > 0:
+                hero = zone.heroes[0]
+                zone.heroes.remove(hero)
+                p.fate_discard.append(hero)
 
-class Villian:
+class Villain:
     
     def init(self, player):
         player.board[3].locked = True
@@ -773,151 +866,62 @@ class Villian:
         for i in range(30):
             card = None
             if i < 10:
-                card = Card(1, "Booty", CardType.EFFECT)
-                card.code = booty
-            elif i < 20:
+                card = Card(1, "Gold Stash", CardType.EFFECT)
+                card.code = gold_stash
+            elif i < 19:
                 card = Card(3, "Sacrifices", CardType.EFFECT)
                 card.code = sacrifice
                 card.targeted = True
                 card.target_set = sacrifice_targets
-            elif i <= 28:
-                card = Card(1, "An Ally", CardType.ALLY)
+            elif i <= 27:
+                card = Card(0, "Gremlin", CardType.ALLY)
                 card.card_ally = Character(3, CharacterType.ALLY)
-            elif i == 29:
+            else:
                 card = Card(2, "Unlock the Magic", CardType.EFFECT)
                 card.code = unlock_the_magic
-                print("Generated unlock the magic")
             if card:
                 deck.append(card)
         return deck
     
+    def generate_fate(self):
+        fate = []
+        for i in range(20):
+            if i < 10:
+                card = Card(0, "Taxes", CardType.EFFECT)
+                card.code = lambda p, gs: p.add_power(-3)
+                card.fate = True
+            elif i < 18:
+                card = Card(0, "Politician", CardType.ALLY)
+                card.card_ally = Character(2, CharacterType.HERO)
+                card.fate = True
+            else:
+                card = Card(0, "Chungus", CardType.ALLY)
+                card.card_ally = Character(6, CharacterType.HERO)
+                card.fate = True
+            if card:
+                fate.append(card)
+        return fate
+
     def get_score(self, player_state):
         return player_state.power
 
     def has_won(self, player_state):
-        return player_state.power >= 25
+        heroes = 0
+        for zone in player_state.board:
+            heroes += len(zone.heroes)
+        return player_state.power >= 25 and heroes <= 1
 
-
-def get_best_simulation(starting_state, total_simulations=500, turn_depth=5):
-    best_ai = None
-    best_ai_states = None
-    best_ai_simulation_number = -1   
-    
-    starting_state = starting_state.duplicate()
-    for player in starting_state.players:
-        player.all_actions_performed = []
-    #random.seed(2)
-                
-    ai_wins = 0
-    opponent_wins = 0
-    for simulation_number in range(1, total_simulations + 1):        
-        current_state = starting_state.duplicate()
-        states = [current_state]
-        for i in range(turn_depth):
-            current_state = current_state.simulate_round()
-            states.append(current_state)
-            current_state.players[0].print_state()
-            if current_state.players[0].has_won() or current_state.players[1].has_won():
-                if current_state.players[0].has_won():
-                    ai_wins += 1
-                elif current_state.players[1].has_won():
-                    opponent_wins += 1
-                break
-        ai_result = current_state.players[0]    
-        print(f"Sim #{simulation_number} AI score: {ai_result.get_state_score()}. Won? {ai_result.has_won()}. Turns: {len(states)}.")
-        if best_ai is None:
-            best_ai = ai_result
-            best_ai_states = states
-            best_ai_simulation_number = simulation_number
-        else:
-            if best_ai.has_won() and not ai_result.has_won():
-                continue
-                
-            if ai_result.has_won() and not best_ai.has_won(): # Won when the best AI didn't
-                best_ai = ai_result
-                best_ai_states = states
-                best_ai_simulation_number = simulation_number
-            elif ai_result.has_won() and len(states) < len(best_ai_states): # Won in less turns
-                best_ai = ai_result
-                best_ai_states = states
-                best_ai_simulation_number = simulation_number
-            elif ai_result.get_state_score() > best_ai.get_state_score(): # Ends in a more favorable position
-                best_ai = ai_result
-                best_ai_states = states
-                best_ai_simulation_number = simulation_number
-    print("=====================")
-    completed_games = opponent_wins + ai_wins
-    #print(f"======\nAI winrate: {(ai_wins/completed_games)*100:.2f}% out of {completed_games} games")    
-    print(f"BEST AI: #{best_ai_simulation_number}. Score: {best_ai.get_state_score()}. Won? {best_ai.has_won()}. Turns: {len(best_ai_states)}.")
-    
-    return best_ai, best_ai_states
 
 def main():
     # print("Villainous :)")
     
     players = []
-    for i in range(0, 2):
-        players.append(PlayerState("AI" if i == 0 else f"Opponent {i}", Villian()))
+    for i in range(0, 3):
+        players.append(PlayerState("AI" if i == 0 else f"Opponent {i}", Villain()))
     PlayGame(VillainousState(players))
-    #PlayGame(KnockoutWhistState(2))
     return
     
-    random.seed(2)
-    starting_state = GameState()
-    ai = PlayerState("AI", maleficent.MaleficentVillian(), agent=MonteCarloAgent()) #Villian())
-    starting_state.players.append(ai)
     
-    opponent = PlayerState("Opponent", Villian())
-    starting_state.players.append(opponent)
-    
-    current_state = starting_state.duplicate()  
-    for i in range(5000):
-        print(f"Turn: {current_state.turn}")
-        current_state = current_state.simulate_round(allow_plans=True)
-        if current_state.players[0].has_won() or current_state.players[1].has_won():
-            print(" A VICTORY HAS OCCURRED ")
-            break
-    
-    index = 0
-    for turn in current_state.players[0].all_actions_performed:
-        print(f"========= Turn {index + 1} ==========")
-        for action in turn:
-            print(str(action))
-        index += 1
-        
-    return
-    
-    TOTAL_SIMULATIONS = 25
-    TURN_DEPTH = 200
-    
-    random.seed(2)
-    best_ai, best_ai_states = get_best_simulation(starting_state, total_simulations=TOTAL_SIMULATIONS, turn_depth=TURN_DEPTH)
-    
-    print("Starting hand:")
-    for card in best_ai_states[0].players[0].hand:
-        print(str(card))   
-    index = 0
-    for turn in best_ai.all_actions_performed:
-        print(f"========= Turn {index + 1} ==========")
-        for action in turn:
-            print(str(action))
-        index += 1
-
-    print("\nTrying to apply to real game:")
-    
-    current_state = starting_state.duplicate()    
-    for turn in best_ai.all_actions_performed:
-        current_state = current_state.play_round("AI", turn)      
-    
-    index = 0
-    for turn in current_state.players[0].all_actions_performed:
-        print(f"========= Turn {index + 1} ==========")
-        for action in turn:
-            print(str(action))
-        index += 1
-    
-    
-
     
 if __name__ == "__main__":
     main()

@@ -371,23 +371,28 @@ def ISMCTS(rootstate, itermax, verbose = False):
     if (verbose): print(rootnode.TreeToString(0))
     else: print(rootnode.ChildrenToString())
 
-    return max(rootnode.childNodes, key = lambda c: c.visits).move # return the move that was most visited
+    best_node = max(rootnode.childNodes, key = lambda c: c.visits)
+    return best_node.move, best_node # return the move that was most visited
 
 def PlayGame(game_state):
     """ Play a sample game between two ISMCTS players.
     """
     state = game_state
     
+    prev_turn = 0
     while state.GetMoves() != []:
+        if prev_turn != state.playerToMove:
+            print(f"============ {state.players[state.playerToMove].identifier}'s Turn ===========")
+        prev_turn = state.playerToMove  
         print(str(state))
         # Use different numbers of iterations (simulations, tree nodes) for different players
         if state.playerToMove == 0:
-            m = ISMCTS(rootstate = state, itermax = 500, verbose = False)
+            m, node = ISMCTS(rootstate = state, itermax = 1000, verbose = False)
         else:
-            m = ISMCTS(rootstate = state, itermax = 100, verbose = False)
-        print("Best Move: " + str(m) + "\n")
+            m, node = ISMCTS(rootstate = state, itermax = 1000, verbose = False)
+        #print("Best Move: " + str(m) + "\n")
+        print(f"Best Move: {m} ({(node.wins/node.visits)*100:.1f}%)\n")
         state.DoMove(m)
-            
     
     someoneWon = False
     nums = range(0, state.numberOfPlayers)
