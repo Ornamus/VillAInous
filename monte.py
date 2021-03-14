@@ -18,7 +18,6 @@
 from math import *
 import random, sys
 from copy import deepcopy
-from moves import MoveZoneMove
 
 class GameState:
     """ A state of the game, i.e. the game board. These are the only functions which are
@@ -379,15 +378,16 @@ def PlayGame(game_state):
     """
     state = game_state
     
-    while (state.GetMoves() != []):
+    while state.GetMoves() != []:
         print(str(state))
         # Use different numbers of iterations (simulations, tree nodes) for different players
         if state.playerToMove == 0:
-            m = ISMCTS(rootstate = state, itermax = 100, verbose = False)
+            m = ISMCTS(rootstate = state, itermax = 500, verbose = False)
         else:
             m = ISMCTS(rootstate = state, itermax = 100, verbose = False)
         print("Best Move: " + str(m) + "\n")
         state.DoMove(m)
+            
     
     someoneWon = False
     nums = range(0, state.numberOfPlayers)
