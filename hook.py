@@ -7,8 +7,8 @@ class CaptainHook(Villain):
         # Three Copies
         for i in range(0, 3):
             card = Card(2, "Boarding Party", CardType.ALLY)
-            card.card_ally = Character(2, CharacterType.ALLY)
-            card.card_ally.adjacent_vanquish = True
+            card.strength = 2
+            card.adjacent_vanquish = True
             deck.append(card)
             
             # TODO: Look at 2 top cards of fate deck, discard both or return them in any order.
@@ -16,7 +16,7 @@ class CaptainHook(Villain):
             deck.append(card)
             
             card = Card(1, "Swashbuckler", CardType.ALLY)
-            card.card_ally = Character(2, CharacterType.ALLY)
+            card.strength = 2
             deck.append(card)
             
             card = Card(0, "Worthy Opponent", CardType.EFFECT)
@@ -49,7 +49,7 @@ class CaptainHook(Villain):
             #deck.append(card)
             
             card = Card(3, "Pirate Brute", CardType.ALLY)
-            card.card_ally = Character(4, CharacterType.ALLY)
+            card.strength = 4
             deck.append(card)
             
         # One Copy
@@ -59,7 +59,7 @@ class CaptainHook(Villain):
         
         # TODO: When played, you may move a hero from his zone to an adjacent unlocked zone
         card = Card(2, "Mr. Starkey", CardType.ALLY)
-        card.card_ally = Character(2, CharacterType.ALLY)
+        card.strength = 2
         deck.append(card)
         
         card = Card(4, "Neverland Map", CardType.ITEM)
@@ -79,8 +79,8 @@ class CaptainHook(Villain):
             
         for i in range(0, 2):
             # TODO: Two allies minimum to vanquish
-            card = Card(0, "Lost Boys", CardType.ALLY)
-            card.card_ally = Character(4, CharacterType.HERO)
+            card = Card(0, "Lost Boys", CardType.HERO)
+            card.strength = 4
             card.fate = True
             fate.append(card)
             
@@ -97,66 +97,83 @@ class CaptainHook(Villain):
             fate.append(card)
         
         # TODO: +1 strength if there are any items attached
-        card = Card(0, "John", CardType.ALLY)
-        card.card_ally = Character(2, CharacterType.HERO)
+        card = Card(0, "John", CardType.HERO)
+        card.strength = 2
         card.fate = True
         fate.append(card)
         
         # TODO: +1 strength for each location with a Hero, this included
-        card = Card(0, "Michael", CardType.ALLY)
-        card.card_ally = Character(1, CharacterType.HERO)
+        card = Card(0, "Michael", CardType.HERO)
+        card.strength = 1
         card.fate = True
         fate.append(card)
         
         # TODO: Force played out of the two options, must be played to board[3], and death has to be tracked
-        card = Card(0, "Peter Pan", CardType.ALLY)
-        card.card_ally = Character(8, CharacterType.HERO)
+        card = Card(0, "Peter Pan", CardType.HERO)
+        card.strength = 8
         card.fate = True
         fate.append(card)
         
         # TODO: Hook discards hand if he moves to this location
-        card = Card(0, "Tick Tock", CardType.ALLY)
-        card.card_ally = Character(5, CharacterType.HERO)
+        card = Card(0, "Tick Tock", CardType.HERO)
+        card.strength = 5
         card.fate = True
         fate.append(card)
         
         # TODO: when played, may discard one ally from her location
-        card = Card(0, "Tinker Bell", CardType.ALLY)
-        card.card_ally = Character(2, CharacterType.HERO)
+        card = Card(0, "Tinker Bell", CardType.HERO)
+        card.strength = 2
         card.fate = True
         fate.append(card)
         
         # TODO: aura, all other heroes in the realm get +1 strength
-        card = Card(0, "Wendy", CardType.ALLY)
-        card.card_ally = Character(3, CharacterType.HERO)
+        card = Card(0, "Wendy", CardType.HERO)
+        card.strength = 3
         card.fate = True
         fate.append(card)
         return fate
         
-    def has_won(self, player_state):
-        for card in player_state.vanquish_history:
-            if card.name == "Peter Pan":
+    def has_won(self, player_state, game_state):
+        if len(player_state.vanquish_history) > 0:
+            pass#print(f"vanquish history: {len(player_state.vanquish_history)}")
+            #for card in player_state.vanquish_history:
+                #print(f"history: {card.name}")
+
+        for entry in player_state.vanquish_history:
+            if entry[0].name == "Peter Pan" and entry[1] == 0:
                 return True
+        #heroes = 0
+        #for zone in player_state.board:
+        #    heroes += len(zone.heroes)
+        #return player_state.power >= 25 and heroes <= 0
         return False
     
 def worthy_opponent(player, game_state):
     from moves import PlayCardMove
     player.add_power(2)
-    return
-    while True:
+    card = None
+    while len(player.fate) > 0:
         card = player.get_fate_card()
-        if card.card_ally and card.card_ally.card_ally_type == CharacterType.HERO:
-            if card.name == "Peter Pan":
-                card.play(player, game_state, zone=player.board[3])
-                break
-            else:
-                moves = []
-                for zone in player.board:
-                    moves.append(PlayCardMove(card, None, zone=zone))
-                game_state.AddInterruptMoves(moves)
-                break
+        if card.card_type == CardType.HERO:
+            break
         else:
             player.fate_discard.append(card)
+    
+    if not card:
+        return
+    if card.card_type != CardType.HERO:   
+        player.fate_discard.append(card)
+        return
+
+    #print(f"Worthy opponent found hero {card}")
+    if card.name == "Peter Pan":
+        card.play(player, game_state, zone=player.board[3])
+    else:
+        moves = []
+        for zone in player.board:
+            moves.append(PlayCardMove(card, None, zone=zone))
+        game_state.AddInterruptMoves(moves)
+
 
 def neverland_map(player, game_state):
     player.board[3].locked = False

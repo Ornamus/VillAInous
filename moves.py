@@ -63,6 +63,9 @@ class PlayCardMove(Move):
             else:
                 player.deck_discard.append(self.card)
         if not self.card.fate:
+            #print(f"Removing {self.card}")
+            #for card in player.hand:
+                #print(f"In hand: {card}")
             player.hand.remove(self.card)
             player.power -= self.card.cost
         self.card.play(player, game_state, target=self.target, zone=player.board[self.zone.number] if self.zone else None)
@@ -70,6 +73,8 @@ class PlayCardMove(Move):
     def __str__(self):
         if self.zone and not self.target:
             return f"Play {self.card.name} to zone {self.zone.number}"
+        if self.card.equip and self.target:
+            return f"Equip {self.card.name} to {self.target.name}"
         return f"Play card {self.card.name}"
                 
     def __eq__(self, other):
@@ -121,6 +126,10 @@ class MoveAllyMove(Move):
         elif self.ally.card_type == CardType.ITEM:
             player.board[self.prev_zone].items.remove(self.ally)
             player.board[self.zone].items.append(self.ally)
+        elif self.ally.card_type == CardType.HERO:
+            player.board[self.prev_zone].heroes.remove(self.ally)
+            player.board[self.zone].heroes.append(self.ally)
+        self.ally.current_zone = self.zone
         
     def __str__(self):
         return f"Move {self.ally.name} to zone {self.zone}"    
@@ -145,9 +154,15 @@ class VanquishMove(Move):
         for ally in self.allies:
             player.board[self.zone].allies.remove(ally)     
             player.deck_discard.append(ally)
+            for item in ally.items:
+                player.deck_discard.append(item)
+            ally.items = []
         player.board[self.zone].heroes.remove(self.hero)
         player.fate_discard.append(self.hero)
-        player.vanquish_history.append(self.hero)
+        player.vanquish_history.append((self.hero, self.zone))
+        for item in self.hero.items:
+            player.fate_discard.append(item)
+        self.hero.items = []
         
         if len(player.board[self.zone].heroes) == 0:
             for action in player.board[self.zone].actions_blockable:
@@ -181,8 +196,12 @@ class FateMove(Move):
         target_player = game_state.players[self.target_player_index]    
         fate_card = target_player.get_fate_card()
         target_player.fate_discard.append(target_player.get_fate_card())           
-        if fate_card.card_type == CardType.ALLY:
+        if fate_card.card_type == CardType.HERO:
             heroes = 0
+            # TODO: make this something like: if fate_card.must_play_to_zone > -1:
+            if fate_card.name == "Peter Pan":
+                target_player.board[3].heroes.append(fate_card)
+                return
             for zone in target_player.board:
                 heroes += len(zone.heroes)
             if (heroes >= 1 and len(target_player.board[3].heroes) == 0) or heroes == 1:

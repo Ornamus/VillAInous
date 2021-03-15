@@ -385,13 +385,17 @@ def PlayGame(game_state):
             print(f"============ {state.players[state.playerToMove].identifier}'s Turn ===========")
         prev_turn = state.playerToMove  
         print(str(state))
+        #print(f"Moves: {len(state.GetMoves(log=True))}")
         # Use different numbers of iterations (simulations, tree nodes) for different players
         if state.playerToMove == 0:
-            m, node = ISMCTS(rootstate = state, itermax = 500, verbose = False)
+            m, node = ISMCTS(rootstate = state, itermax = 50, verbose = False)
         else:
-            m, node = ISMCTS(rootstate = state, itermax = 100, verbose = False)
+            m, node = ISMCTS(rootstate = state, itermax = 50, verbose = False)
         #print("Best Move: " + str(m) + "\n")
         print(f"Best Move: {m} ({(node.wins/node.visits)*100:.1f}%)\n")
+        for card in state.players[state.playerToMove].hand:
+            pass#if card.card_ally and len(card.card_ally.items) > 0:
+                #print(f"Card {card} has items")
         state.DoMove(m)
     
     someoneWon = False
