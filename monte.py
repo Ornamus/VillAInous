@@ -18,6 +18,7 @@
 from math import *
 import random, sys
 from copy import deepcopy
+from multiprocessing import Pool
 
 class GameState:
     """ A state of the game, i.e. the game board. These are the only functions which are
@@ -338,6 +339,14 @@ def ISMCTS(rootstate, itermax, verbose = False):
     """
 
     rootnode = Node()
+    #with Pool(5) as p:
+    #    print(p.starmap(POOLTHING, [(rootnode, rootstate) for i in range(0, itermax)]))
+    
+    #if (verbose): print(rootnode.TreeToString(0))
+    #else: print(rootnode.ChildrenToString())
+
+    #best_node = max(rootnode.childNodes, key = lambda c: c.visits)
+    #return best_node.move, best_node # return the move that was most visited
     
     for i in range(itermax):
         node = rootnode
@@ -345,11 +354,13 @@ def ISMCTS(rootstate, itermax, verbose = False):
         # Determinize
         state = rootstate.CloneAndRandomize(rootstate.playerToMove)
         
+        #print("select")
         # Select
         while state.GetMoves() != [] and node.GetUntriedMoves(state.GetMoves()) == []: # node is fully expanded and non-terminal
             node = node.UCBSelectChild(state.GetMoves())
             state.DoMove(node.move)
-
+        
+        #print("Expand")
         # Expand
         untriedMoves = node.GetUntriedMoves(state.GetMoves())
         if untriedMoves != []: # if we can expand (i.e. state/node is non-terminal)
@@ -357,11 +368,13 @@ def ISMCTS(rootstate, itermax, verbose = False):
             player = state.playerToMove
             state.DoMove(m)
             node = node.AddChild(m, player) # add child and descend tree
-
+    
+        #print("Simulate")
         # Simulate
         while state.GetMoves() != []: # while state is non-terminal
             state.DoMove(random.choice(state.GetMoves()))
 
+        #print("Back")
         # Backpropagate
         while node != None: # backpropagate from the expanded node and work back to the root node
             node.Update(state)
@@ -374,6 +387,36 @@ def ISMCTS(rootstate, itermax, verbose = False):
     best_node = max(rootnode.childNodes, key = lambda c: c.visits)
     return best_node.move, best_node # return the move that was most visited
 
+def POOLTHING(node, rootstate):
+    # Determinize
+    state = rootstate.CloneAndRandomize(rootstate.playerToMove)
+    
+    #print("select")
+    # Select
+    while state.GetMoves() != [] and node.GetUntriedMoves(state.GetMoves()) == []: # node is fully expanded and non-terminal
+        node = node.UCBSelectChild(state.GetMoves())
+        state.DoMove(node.move)
+    
+    #print("Expand")
+    # Expand
+    untriedMoves = node.GetUntriedMoves(state.GetMoves())
+    if untriedMoves != []: # if we can expand (i.e. state/node is non-terminal)
+        m = random.choice(untriedMoves) 
+        player = state.playerToMove
+        state.DoMove(m)
+        node = node.AddChild(m, player) # add child and descend tree
+
+    #print("Simulate")
+    # Simulate
+    while state.GetMoves() != []: # while state is non-terminal
+        state.DoMove(random.choice(state.GetMoves()))
+
+    #print("Back")
+    # Backpropagate
+    while node != None: # backpropagate from the expanded node and work back to the root node
+        node.Update(state)
+        node = node.parentNode
+
 def PlayGame(game_state):
     """ Play a sample game between two ISMCTS players.
     """
@@ -381,26 +424,25 @@ def PlayGame(game_state):
     
     prev_turn = 0
     while state.GetMoves() != []:
-        if prev_turn != state.playerToMove:
-            print(f"============ {state.players[state.playerToMove].identifier}'s Turn ===========")
+        #if type(state) is VillainousState and prev_turn != state.playerToMove:
+            #print(f"============ {state.players[state.playerToMove].identifier}'s Turn ===========")
         prev_turn = state.playerToMove  
         print(str(state))
         #print(f"Moves: {len(state.GetMoves(log=True))}")
         # Use different numbers of iterations (simulations, tree nodes) for different players
         if state.playerToMove == 0:
-            m, node = ISMCTS(rootstate = state, itermax = 50, verbose = False)
+            m, node = ISMCTS(rootstate = state, itermax = 500, verbose = False)
+            print(f"Best Move: {m} ({(node.wins/node.visits)*100:.1f}%)\n")
         else:
-            m, node = ISMCTS(rootstate = state, itermax = 50, verbose = False)
+            m = random.choice(state.GetMoves())
+            print(f"\nRandom Move: {m}\n")
         #print("Best Move: " + str(m) + "\n")
-        print(f"Best Move: {m} ({(node.wins/node.visits)*100:.1f}%)\n")
-        for card in state.players[state.playerToMove].hand:
-            pass#if card.card_ally and len(card.card_ally.items) > 0:
-                #print(f"Card {card} has items")
+        #print(f"Best Move: {m} ({(node.wins/node.visits)*100:.1f}%)\n")
         state.DoMove(m)
     
     someoneWon = False
     nums = range(0, state.numberOfPlayers)
-    if type(game_state) is KnockoutWhistState:
+    if type(game_state) is KnockoutWhistState:# or True:
         nums = range(1, state.numberOfPlayers + 1)
     for p in nums:
         if state.GetResult(p) > 0:
