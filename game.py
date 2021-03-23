@@ -512,9 +512,10 @@ class ISMCTSAgent(Agent):
 
 class RegressionAgent(Agent):
 
-    def __init__(self):
+    def __init__(self, verbose=True):
         super().__init__()
         self.estimator = None
+        self.verbose = verbose
         
     def GetMove(self, state):
         best_move = None
@@ -532,28 +533,30 @@ class RegressionAgent(Agent):
                 for second_move in future_state.GetMoves():
                     second_future_state = future_state.CloneAndRandomize(state.playerToMove)
                     second_future_state.DoMove(second_move)
-                    pred = self.estimator.predict([second_future_state.to_inputs(state.playerToMove)], verbose=0)
-                    if pred > best_pred:
-                        best_pred = pred
-                prediction = best_pred
+                    inputs.append(second_future_state.to_inputs(state.playerToMove))
+                    moves.append(move)
+                    
             else:
-                #inputs.append(future_state.to_inputs(state.playerToMove))
-                #moves.appepnd(move)
-                prediction = self.estimator.predict([future_state.to_inputs(state.playerToMove)], verbose=0)
-            print(f"[M:{move}   {best_val*100:.1f}%")
-            if prediction > best_val or best_move is None:
-                best_val = prediction
-                best_move = move
-                
-        print(f"\nBest Move: {best_move} ({best_val*100:.1f}%)\n")
-        return best_move
+                inputs.append(future_state.to_inputs(state.playerToMove))
+                moves.append(move)                          
         
+        printed_moves = []
         index = 0
-        for prediction in self.estimator.predict(inputs, verbose=0):
+        predictions = self.estimator.predict(inputs, verbose=0)
+
+        if len(inputs) == 1:
+            predictions = [predictions]
+        for prediction in predictions:
             if prediction > best_val or best_move is None:
                 best_val = prediction
                 best_move = moves[index]    
-            index += 1
+            if self.verbose:
+                print(f"[M:{moves[index]} {prediction*100:.1f}%")
+            index += 1            
+        
+        if self.verbose:
+            print(f"\nBest Move: {best_move} ({best_val*100:.1f}%)\n")
+        return best_move
 
 class BoardZone:
     
@@ -838,9 +841,13 @@ def encode_cards(state):
 def main():
     # print("Villainous :)")
     
-    agents = [RegressionAgent(), RegressionAgent()]#[ISMCTSAgent(iterations=500), ISMCTSAgent(iterations=500)]
+    #agents = [ISMCTSAgent(iterations=50, rollout_agent=RegressionAgent(verbose=False)), ISMCTSAgent(iterations=500)]
+    agents = [ISMCTSAgent(iterations=500), RegressionAgent()]
     wins = 0
-    for i in range(0, 100):
+    losses = 0
+    total_games = 1000
+    prev_start = 1
+    for i in range(0, total_games):
         players = []
         for i in range(0, 2):
             player = PlayerState("ISMCTS" if i == 0 else f"Regression", Villain())
@@ -848,9 +855,15 @@ def main():
     
         game = VillainousState(players)
         game.card_encoding = encode_cards(game) 
+        game.playerToMove = 0 if prev_start == 1 else 1
+        prev_start = game.playerToMove                
+        print(f"{game.playerToMove} starts")
         if PlayGame(agents, game) == 0:
             wins += 1
-    print(f"Wins: {wins}/100")
+        else:
+            losses += 1
+        print(f"Current Record: {wins}-{losses} ({wins+losses} games)")
+    print(f"\n Final Wins: {wins}-{losses} ({wins+losses} games)")
     return
     
     

@@ -26,7 +26,8 @@ from keras.wrappers.scikit_learn import KerasRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.model_selection import cross_val_score
 from sklearn.model_selection import KFold
-
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
 class GameState:
     """ A state of the game, i.e. the game board. These are the only functions which are
@@ -174,8 +175,10 @@ def init_model():
         model.compile(loss='mean_squared_error', optimizer='adam')
         return model
     # evaluate model
-    estimator = KerasRegressor(build_fn=baseline_model, epochs=500, batch_size=5, verbose=2)
+    estimator = KerasRegressor(build_fn=baseline_model, epochs=300, batch_size=50, verbose=2)
+    print(f"Type of x: {type(X)}, Y: {type(Y)}")
     estimator.fit(X, Y)
+    estimator.model.save("TheModel")
     #estimator.fit(X[0:1,:], Y[0:1], epochs=1, batch_size=1)
     return
     kfold = KFold(n_splits=10)
@@ -198,12 +201,12 @@ def record(state, result, player):
     data_x.append(entry)
     data_y.append(result)    
     
+    #estimator.fit(np.array([entry]), np.array([result]), epochs=1, batch_size=1)
+
     entry = deepcopy(entry)
     entry.append(result)
     data.append(entry)
     
-    #estimator.fit(np.array(entry), [result], epochs=1, batch_size=1)
-
 
 def ISMCTS(rootstate, itermax, verbose = False, rollout_agent=None):
     global records, estimator, data
@@ -251,11 +254,11 @@ def ISMCTS(rootstate, itermax, verbose = False, rollout_agent=None):
     else: print(rootnode.ChildrenToString())
     
     for node in rootnode.childNodes:
-        potential_state = rootstate.Clone()#
-        if node.move in potential_state.GetMoves():
-            potential_state.DoMove(node.move)
-            record(potential_state, node.wins / node.visits, node.playerJustMoved)
-            #print("RECORD")
+        if node.playerJustMoved == 0 and node.visits >= 10:
+            potential_state = rootstate.Clone()#
+            if node.move in potential_state.GetMoves():
+                potential_state.DoMove(node.move)
+                record(potential_state, node.wins / node.visits, node.playerJustMoved)
 
     best_node = max(rootnode.childNodes, key = lambda c: c.visits)
     return best_node.move, best_node # return the move that was most visited
@@ -273,8 +276,8 @@ def PlayGame(agents, game_state):
     
     for agent in agents:
         agent.estimator = estimator
-        #if type(agent).__name__ is ISMCTSAgent.__name__:
-            #agent.rollout_agent.estimator = estimator
+        if type(agent).__name__ is ISMCTSAgent.__name__ and agent.rollout_agent != None:
+            agent.rollout_agent.estimator = estimator
         
     prev_turn = 0
     while state.GetMoves() != []:
@@ -329,6 +332,8 @@ def PlayGame(agents, game_state):
     data_y.clear()
     records.clear()
     data.clear()
+    
+    estimator.model.save("TheModel")
     
     return winner
     
