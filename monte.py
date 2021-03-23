@@ -18,7 +18,15 @@
 from math import *
 import random, sys
 from copy import deepcopy
-from multiprocessing import Pool
+from numpy import loadtxt
+import numpy as np
+from keras.models import Sequential
+from keras.layers import Dense
+from keras.wrappers.scikit_learn import KerasRegressor
+from sklearn.model_selection import train_test_split
+from sklearn.model_selection import cross_val_score
+from sklearn.model_selection import KFold
+
 
 class GameState:
     """ A state of the game, i.e. the game board. These are the only functions which are
@@ -69,190 +77,6 @@ class GameState:
         """
         pass
 
-class Card:
-    """ A playing card, with rank and suit.
-        rank must be an integer between 2 and 14 inclusive (Jack=11, Queen=12, King=13, Ace=14)
-        suit must be a string of length 1, one of 'C' (Clubs), 'D' (Diamonds), 'H' (Hearts) or 'S' (Spades)
-    """
-    def __init__(self, rank, suit):
-        if rank not in list(range(2, 14+1)):
-            raise Exception("Invalid rank")
-        if suit not in ['C', 'D', 'H', 'S']:
-            raise Exception("Invalid suit")
-        self.rank = rank
-        self.suit = suit
-    
-    def __repr__(self):
-        return "??23456789TJQKA"[self.rank] + self.suit
-    
-    def __eq__(self, other):
-        return self.rank == other.rank and self.suit == other.suit
-
-    def __ne__(self, other):
-        return self.rank != other.rank or self.suit != other.suit
-
-class KnockoutWhistState(GameState):
-    """ A state of the game Knockout Whist.
-        See http://www.pagat.com/whist/kowhist.html for a full description of the rules.
-        For simplicity of implementation, this version of the game does not include the "dog's life" rule
-        and the trump suit for each round is picked randomly rather than being chosen by one of the players.
-    """
-    def __init__(self, n):
-        """ Initialise the game state. n is the number of players (from 2 to 7).
-        """
-        self.numberOfPlayers = n
-        self.playerToMove   = 1
-        self.tricksInRound  = 7
-        self.playerHands    = {p:[] for p in range(1, self.numberOfPlayers+1)}
-        self.discards       = [] # Stores the cards that have been played already in this round
-        self.currentTrick   = []
-        self.trumpSuit      = None
-        self.tricksTaken    = {} # Number of tricks taken by each player this round
-        self.knockedOut     = {p:False for p in range(1, self.numberOfPlayers+1)}
-        self.Deal()
-    
-    def Clone(self):
-        """ Create a deep clone of this game state.
-        """
-        st = KnockoutWhistState(self.numberOfPlayers)
-        st.playerToMove = self.playerToMove
-        st.tricksInRound = self.tricksInRound
-        st.playerHands  = deepcopy(self.playerHands)
-        st.discards     = deepcopy(self.discards)
-        st.currentTrick = deepcopy(self.currentTrick)
-        st.trumpSuit    = self.trumpSuit
-        st.tricksTaken  = deepcopy(self.tricksTaken)
-        st.knockedOut   = deepcopy(self.knockedOut)
-        return st
-    
-    def CloneAndRandomize(self, observer):
-        """ Create a deep clone of this game state, randomizing any information not visible to the specified observer player.
-        """
-        st = self.Clone()
-        
-        # The observer can see his own hand and the cards in the current trick, and can remember the cards played in previous tricks
-        seenCards = st.playerHands[observer] + st.discards + [card for (player,card) in st.currentTrick]
-        # The observer can't see the rest of the deck
-        unseenCards = [card for card in st.GetCardDeck() if card not in seenCards]
-        
-        # Deal the unseen cards to the other players
-        random.shuffle(unseenCards)
-        for p in range(1, st.numberOfPlayers+1):
-            if p != observer:
-                # Deal cards to player p
-                # Store the size of player p's hand
-                numCards = len(self.playerHands[p])
-                # Give player p the first numCards unseen cards
-                st.playerHands[p] = unseenCards[ : numCards]
-                # Remove those cards from unseenCards
-                unseenCards = unseenCards[numCards : ]
-        
-        return st
-    
-    def GetCardDeck(self):
-        """ Construct a standard deck of 52 cards.
-        """
-        return [Card(rank, suit) for rank in range(2, 14+1) for suit in ['C', 'D', 'H', 'S']]
-    
-    def Deal(self):
-        """ Reset the game state for the beginning of a new round, and deal the cards.
-        """
-        self.discards = []
-        self.currentTrick = []
-        self.tricksTaken = {p:0 for p in range(1, self.numberOfPlayers+1)}
-        
-        # Construct a deck, shuffle it, and deal it to the players
-        deck = self.GetCardDeck()
-        random.shuffle(deck)
-        for p in range(1, self.numberOfPlayers+1):
-            self.playerHands[p] = deck[ : self.tricksInRound]
-            deck = deck[self.tricksInRound : ]
-        
-        # Choose the trump suit for this round
-        self.trumpSuit = random.choice(['C', 'D', 'H', 'S'])
-    
-    def GetNextPlayer(self, p):
-        """ Return the player to the left of the specified player, skipping players who have been knocked out
-        """
-        next = (p % self.numberOfPlayers) + 1
-        # Skip any knocked-out players
-        while next != p and self.knockedOut[next]:
-            next = (next % self.numberOfPlayers) + 1
-        return next
-    
-    def DoMove(self, move):
-        """ Update a state by carrying out the given move.
-            Must update playerToMove.
-        """
-        # Store the played card in the current trick
-        self.currentTrick.append((self.playerToMove, move))
-        
-        # Remove the card from the player's hand
-        self.playerHands[self.playerToMove].remove(move)
-        
-        # Find the next player
-        self.playerToMove = self.GetNextPlayer(self.playerToMove)
-        
-        # If the next player has already played in this trick, then the trick is over
-        if any(True for (player, card) in self.currentTrick if player == self.playerToMove):
-            # Sort the plays in the trick: those that followed suit (in ascending rank order), then any trump plays (in ascending rank order)
-            (leader, leadCard) = self.currentTrick[0]
-            suitedPlays = [(player, card.rank) for (player, card) in self.currentTrick if card.suit == leadCard.suit]
-            trumpPlays  = [(player, card.rank) for (player, card) in self.currentTrick if card.suit == self.trumpSuit]
-            sortedPlays = sorted(suitedPlays, key = lambda player_rank : player_rank[1]) + sorted(trumpPlays, key = lambda player_rank1 : player_rank1[1])
-            # The winning play is the last element in sortedPlays
-            trickWinner = sortedPlays[-1][0]
-            
-            # Update the game state
-            self.tricksTaken[trickWinner] += 1
-            self.discards += [card for (player, card) in self.currentTrick]
-            self.currentTrick = []
-            self.playerToMove = trickWinner
-            
-            # If the next player's hand is empty, this round is over
-            if self.playerHands[self.playerToMove] == []:
-                self.tricksInRound -= 1
-                self.knockedOut = {p:(self.knockedOut[p] or self.tricksTaken[p] == 0) for p in range(1, self.numberOfPlayers+1)}
-                # If all but one players are now knocked out, the game is over
-                if len([x for x in self.knockedOut.values() if x == False]) <= 1:
-                    self.tricksInRound = 0
-                
-                self.Deal()
-    
-    def GetMoves(self):
-        """ Get all possible moves from this state.
-        """
-        hand = self.playerHands[self.playerToMove]
-        if self.currentTrick == []:
-            # May lead a trick with any card
-            return hand
-        else:
-            (leader, leadCard) = self.currentTrick[0]
-            # Must follow suit if it is possible to do so
-            cardsInSuit = [card for card in hand if card.suit == leadCard.suit]
-            if cardsInSuit != []:
-                return cardsInSuit
-            else:
-                # Can't follow suit, so can play any card
-                return hand
-    
-    def GetResult(self, player):
-        """ Get the game result from the viewpoint of player. 
-        """
-        return 0 if (self.knockedOut[player]) else 1
-    
-    def __repr__(self):
-        """ Return a human-readable representation of the state
-        """
-        result  = "Round %i" % self.tricksInRound
-        result += " | P%i: " % self.playerToMove
-        result += ",".join(str(card) for card in self.playerHands[self.playerToMove])
-        result += " | Tricks: %i" % self.tricksTaken[self.playerToMove]
-        result += " | Trump: %s" % self.trumpSuit
-        result += " | Trick: ["
-        result += ",".join(("%i:%s" % (player, card)) for (player, card) in self.currentTrick)
-        result += "]"
-        return result
 
 class Node:
     """ A node in the game tree. Note wins is always from the viewpoint of playerJustMoved.
@@ -332,35 +156,75 @@ class Node:
             s += str(c) + "\n"
         return s
 
+model = None
+estimator = None
 
-def ISMCTS(rootstate, itermax, verbose = False):
+def init_model():
+    global model, estimator
+    dataset = loadtxt('game.txt', delimiter=',')
+    X = dataset[:,0:32]
+    Y = dataset[:,32]
+
+    def baseline_model():
+        # create model
+        model = Sequential()
+        model.add(Dense(32, input_dim=32, kernel_initializer='normal', activation='relu'))
+        model.add(Dense(1, kernel_initializer='normal'))
+        # Compile model
+        model.compile(loss='mean_squared_error', optimizer='adam')
+        return model
+    # evaluate model
+    estimator = KerasRegressor(build_fn=baseline_model, epochs=500, batch_size=5, verbose=2)
+    estimator.fit(X, Y)
+    #estimator.fit(X[0:1,:], Y[0:1], epochs=1, batch_size=1)
+    return
+    kfold = KFold(n_splits=10)
+    results = cross_val_score(estimator, X, Y, cv=kfold)
+    print("Baseline: %.2f (%.2f) MSE" % (results.mean(), results.std()))
+    estimator.fit(X, Y)
+    
+    return
+
+
+records = []
+data = []
+data_x = []
+data_y = []
+def record(state, result, player):
+    global records, data, estimator
+    records.append((state, result))
+    
+    entry = state.to_inputs(player)
+    data_x.append(entry)
+    data_y.append(result)    
+    
+    entry = deepcopy(entry)
+    entry.append(result)
+    data.append(entry)
+    
+    #estimator.fit(np.array(entry), [result], epochs=1, batch_size=1)
+
+
+def ISMCTS(rootstate, itermax, verbose = False, rollout_agent=None):
+    global records, estimator, data
     """ Conduct an ISMCTS search for itermax iterations starting from rootstate.
         Return the best move from the rootstate.
     """
 
     rootnode = Node()
-    #with Pool(5) as p:
-    #    print(p.starmap(POOLTHING, [(rootnode, rootstate) for i in range(0, itermax)]))
-    
-    #if (verbose): print(rootnode.TreeToString(0))
-    #else: print(rootnode.ChildrenToString())
+    #rollout_agent = RegressionAgent(estimator)
 
-    #best_node = max(rootnode.childNodes, key = lambda c: c.visits)
-    #return best_node.move, best_node # return the move that was most visited
-    
     for i in range(itermax):
         node = rootnode
         
         # Determinize
         state = rootstate.CloneAndRandomize(rootstate.playerToMove)
         
-        #print("select")
         # Select
         while state.GetMoves() != [] and node.GetUntriedMoves(state.GetMoves()) == []: # node is fully expanded and non-terminal
             node = node.UCBSelectChild(state.GetMoves())
             state.DoMove(node.move)
         
-        #print("Expand")
         # Expand
         untriedMoves = node.GetUntriedMoves(state.GetMoves())
         if untriedMoves != []: # if we can expand (i.e. state/node is non-terminal)
@@ -369,12 +233,14 @@ def ISMCTS(rootstate, itermax, verbose = False):
             state.DoMove(m)
             node = node.AddChild(m, player) # add child and descend tree
     
-        #print("Simulate")
         # Simulate
         while state.GetMoves() != []: # while state is non-terminal
-            state.DoMove(random.choice(state.GetMoves()))
-
-        #print("Back")
+            if rollout_agent:
+                move = rollout_agent.GetMove(state)
+                state.DoMove(move)
+            else:
+                state.DoMove(random.choice(state.GetMoves()))
+        #print(f"{i}/{itermax}")
         # Backpropagate
         while node != None: # backpropagate from the expanded node and work back to the root node
             node.Update(state)
@@ -383,73 +249,88 @@ def ISMCTS(rootstate, itermax, verbose = False):
     # Output some information about the tree - can be omitted
     if (verbose): print(rootnode.TreeToString(0))
     else: print(rootnode.ChildrenToString())
+    
+    for node in rootnode.childNodes:
+        potential_state = rootstate.Clone()#
+        if node.move in potential_state.GetMoves():
+            potential_state.DoMove(node.move)
+            record(potential_state, node.wins / node.visits, node.playerJustMoved)
+            #print("RECORD")
 
     best_node = max(rootnode.childNodes, key = lambda c: c.visits)
     return best_node.move, best_node # return the move that was most visited
 
-def POOLTHING(node, rootstate):
-    # Determinize
-    state = rootstate.CloneAndRandomize(rootstate.playerToMove)
-    
-    #print("select")
-    # Select
-    while state.GetMoves() != [] and node.GetUntriedMoves(state.GetMoves()) == []: # node is fully expanded and non-terminal
-        node = node.UCBSelectChild(state.GetMoves())
-        state.DoMove(node.move)
-    
-    #print("Expand")
-    # Expand
-    untriedMoves = node.GetUntriedMoves(state.GetMoves())
-    if untriedMoves != []: # if we can expand (i.e. state/node is non-terminal)
-        m = random.choice(untriedMoves) 
-        player = state.playerToMove
-        state.DoMove(m)
-        node = node.AddChild(m, player) # add child and descend tree
 
-    #print("Simulate")
-    # Simulate
-    while state.GetMoves() != []: # while state is non-terminal
-        state.DoMove(random.choice(state.GetMoves()))
-
-    #print("Back")
-    # Backpropagate
-    while node != None: # backpropagate from the expanded node and work back to the root node
-        node.Update(state)
-        node = node.parentNode
-
-def PlayGame(game_state):
+def PlayGame(agents, game_state):
     """ Play a sample game between two ISMCTS players.
     """
+    global model, estimator, data_x, data_y, data, records
+    from game import ISMCTSAgent
+    if estimator is None:
+        init_model()
+    
     state = game_state
     
+    for agent in agents:
+        agent.estimator = estimator
+        #if type(agent).__name__ is ISMCTSAgent.__name__:
+            #agent.rollout_agent.estimator = estimator
+        
     prev_turn = 0
     while state.GetMoves() != []:
-        #if type(state) is VillainousState and prev_turn != state.playerToMove:
-            #print(f"============ {state.players[state.playerToMove].identifier}'s Turn ===========")
+        if prev_turn != state.playerToMove:
+            print(f"============ {state.players[state.playerToMove].identifier}'s Turn ===========")
         prev_turn = state.playerToMove  
         print(str(state))
-        #print(f"Moves: {len(state.GetMoves(log=True))}")
-        # Use different numbers of iterations (simulations, tree nodes) for different players
-        if state.playerToMove == 0:
-            m, node = ISMCTS(rootstate = state, itermax = 500, verbose = False)
-            print(f"Best Move: {m} ({(node.wins/node.visits)*100:.1f}%)\n")
+        
+        if len(agents) > 0:
+            m = agents[state.playerToMove].GetMove(state)
         else:
-            m = random.choice(state.GetMoves())
-            print(f"\nRandom Move: {m}\n")
-        #print("Best Move: " + str(m) + "\n")
-        #print(f"Best Move: {m} ({(node.wins/node.visits)*100:.1f}%)\n")
+            # Use different numbers of iterations (simulations, tree nodes) for different players
+            if state.playerToMove == 0:
+                m, node = ISMCTS(rootstate = state, itermax = 500, verbose = False)
+                print(f"Best Move: {m} ({(node.wins/node.visits)*100:.1f}%)\n")
+                future_state = state.CloneAndRandomize(state.playerToMove)
+                future_state.DoMove(m)
+                prediction = estimator.predict([future_state.to_inputs(node.playerJustMoved)])
+                print(f"Model prediction: {prediction}")
+            else:
+                m, node = ISMCTS(rootstate = state, itermax = 500, verbose = False)
+                print(f"Best Move: {m} ({(node.wins/node.visits)*100:.1f}%)\n")
+                #m = random.choice(state.GetMoves())
+                #print(f"\nRandom Move: {m}\n")
+
         state.DoMove(m)
     
     someoneWon = False
     nums = range(0, state.numberOfPlayers)
-    if type(game_state) is KnockoutWhistState:# or True:
-        nums = range(1, state.numberOfPlayers + 1)
+    
+    winner = None
     for p in nums:
         if state.GetResult(p) > 0:
             print("Player " + str(p) + " wins!")
+            winner = p
             someoneWon = True
     if not someoneWon:
         print("Nobody wins!")
-
+    
+    f = open("game.txt", "a")
+    print(f"Records taken: {len(records)}")
+    index = 0
+    for entry in data_x:
+        str_list = [str(element) for element in entry]
+        list_str = ",".join(str_list)
+        list_str += f",{data_y[index]}\n"
+        f.write(list_str)
+        #print(f"{entry} -> {data_y[index]}")
+        index += 1
+    f.close()
+    data_x.clear()
+    data_y.clear()
+    records.clear()
+    data.clear()
+    
+    return winner
+    
 if __name__ == "__main__":
     PlayGame()

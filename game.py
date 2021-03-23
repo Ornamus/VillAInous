@@ -3,9 +3,10 @@ from enum import Enum
 from moves import *
 import random
 import collections
-from monte import GameState, PlayGame, KnockoutWhistState
+from monte import GameState, PlayGame, ISMCTS
 from itertools import chain, combinations
 import hook
+import operator
 
 VERBOSE_LOG = False
 
@@ -52,6 +53,7 @@ class VillainousState(GameState):
         """ Create a deep clone of this game state.
         """
         st = VillainousState(deepcopy(self.players), game_init=False)
+        st.card_encoding = self.card_encoding
         st.playerToMove = self.playerToMove
         st.actions_used = deepcopy(self.actions_used)
         st.interrupt_moves = deepcopy(self.interrupt_moves)
@@ -136,6 +138,8 @@ class VillainousState(GameState):
             if self.GetMoves() == [] or type(move) is EndTurnMove:
                 # Out of moves, this player's turn is over
                 self.EndPlayerTurn()
+        
+        return self
     
     def EndPlayerTurn(self):
         player = self.players[self.playerToMove]
@@ -282,6 +286,32 @@ class VillainousState(GameState):
         """
         return str(self)
 
+    def to_inputs(self, player_number):
+        num_cards = len(self.card_encoding)
+        player = self.players[player_number]
+        
+        inputs = [1 if player_number == self.playerToMove else 0, player.power]
+
+        for zone in player.board:
+            inputs.append(1 if zone.locked else 0)
+        
+        sorted_hand = sorted(player.hand, key=operator.attrgetter('name'))
+        
+        for i in range(0, 4):
+            # One-hot encode the card
+            card_inputs = [0] * num_cards
+            if i < len(sorted_hand):
+                card = sorted_hand[i]
+                card_inputs[self.card_encoding[card.name]] = 1           
+            inputs.extend(card_inputs)
+        
+        for other_player in self.players:
+            if other_player != player:
+                inputs.extend([1 if other_player == self.players[self.playerToMove] else 0, other_player.power])     
+                for zone in other_player.board:
+                    inputs.append(1 if zone.locked else 0)
+        return inputs
+
 def gold_stash(p, gs):
     p.add_power(2)
 
@@ -301,76 +331,20 @@ def sacrifice(target, p, gs):
         p.discard_card(card)
     p.add_power(len(target) * 2)
 
-class Agent:
-
-    def plan_whole_turn(self, player_state, game_state):
-        return None
-
-    def pick_zone(self, options, player_state, game_state):
-        return options[random.randint(0, len(options) - 1)]
-
-    def pick_ally_zone(self, ally, options, player_state, game_state):
-        return options[random.randint(0, len(options) - 1)]            
-        
-    def pick_card(self, playable_cards, player_state, game_state):
-        return playable_cards[random.randint(0, len(playable_cards) - 1)]
-        
-    def pick_discards(self, card_options, player_state, game_state):
-        cards = copy(card_options)
-        discards = []
-        for i in range(0, random.randint(0, len(cards))):
-            card = cards[random.randint(0, len(cards) - 1)]
-            discards.append(card)
-            cards.remove(card)
-        return discards
-    
-    def pick_vanquish(self, vanquish_options, player_state, game_state):
-        return vanquish_options[random.randint(0, len(vanquish_options) - 1)]
-    
-    def pick_move_ally(self, zones_with_allies, player, game_state):
-        if len(zones_with_allies) > 1:
-            zone = zones_with_allies[random.randint(0, len(zones_with_allies) - 1)]
-        elif len(zones_with_allies) == 1:
-            zone = zones_with_allies[0]
-        else:
-            return None, None, None
-        
-        ally = zone.allies[random.randint(0, len(zone.allies) - 1)]
-        
-        can_left = not zone.number == player.board[0].number
-        can_right = not zone.number == player.board[-1].number          
-            
-        direction = 0
-        if can_left and can_right:
-            direction = random.randint(-1, 1)
-        elif can_right:
-            direction = random.randint(0, 1)
-        else:
-            direction = random.randint(-1, 0)
-        if direction == 0:
-            return None, None, None
-        dest_zone = player.board[zone.number + direction]
-        return ally, zone, dest_zone
-        
-class MonteCarloAgent(Agent):
-
-    def plan_whole_turn(self, player_state, game_state):
-        best_ai, best_ai_states = get_best_simulation(game_state, total_simulations=5, turn_depth=4)
-        return best_ai.all_actions_performed[0]
    
 class PlayerState:
        
-    def __init__(self, identifier, Villain, agent=Agent()):
+    def __init__(self, identifier, Villain, agent=None):
         print(f"Player init: {identifier}")
         board_array = [
-            [[PowerAction(1), DiscardAction()],     [VanquishAction(), PlayCardAction()]],
-            [[PowerAction(1), PlayCardAction()],       [FateAction(), DiscardAction()]],
-            [[PlayCardAction(number=1), MoveAllyAction()],      [PowerAction(3), PlayCardAction(number=2)]],
-            [[FateAction(), PowerAction(2)], [MoveHeroAction(), PlayCardAction()]],
-            #[[PlayCardAction(number=1), VanquishAction()], [PowerAction(1), PlayCardAction(number=0)]],
-            #[[PlayCardAction(), PowerAction(2)],       [VanquishAction(), FateAction()]],
-            #[[MoveAllyAction(), FateAction()],      [PowerAction(2), DiscardAction()]],
-            #[[PowerAction(4), DiscardAction()], [MoveAllyAction(), PlayCardAction()]],
+            #[[PowerAction(1), DiscardAction()],     [VanquishAction(), PlayCardAction()]],
+            #[[PowerAction(1), PlayCardAction()],       [FateAction(), DiscardAction()]],
+            #[[PlayCardAction(number=1), MoveAllyAction()],      [PowerAction(3), PlayCardAction(number=2)]],
+            #[[FateAction(), PowerAction(2)], [MoveHeroAction(), PlayCardAction()]],
+            [[PlayCardAction(number=1), VanquishAction()], [PowerAction(1), PlayCardAction(number=0)]],
+            [[PlayCardAction(), PowerAction(2)],       [VanquishAction(), Action()]],
+            [[MoveAllyAction(), Action()],      [PowerAction(2), DiscardAction()]],
+            [[PowerAction(4), DiscardAction()], [MoveAllyAction(), PlayCardAction()]],
         ]
         self.identifier = identifier
         self.hand = []
@@ -516,6 +490,70 @@ class PlayerState:
     
     def __ne__(self, other):
         return self.identifier != other.identifier# or self.power != other.power
+
+class Agent:
+
+    def GetMove(self, state):
+        move = random.choice(state.GetMoves())
+        print(f"Random Move: {move}")
+        return move
+
+
+class ISMCTSAgent(Agent):
+
+    def __init__(self, iterations=500, rollout_agent=None):
+        self.iterations = iterations
+        self.rollout_agent = rollout_agent
+
+    def GetMove(self, state):
+        m, node = ISMCTS(rootstate = state, itermax = self.iterations, verbose = False, rollout_agent=self.rollout_agent)
+        print(f"Best Move: {m} ({(node.wins/node.visits)*100:.1f}%)\n")
+        return m
+
+class RegressionAgent(Agent):
+
+    def __init__(self):
+        super().__init__()
+        self.estimator = None
+        
+    def GetMove(self, state):
+        best_move = None
+        best_val = 0
+        
+        #inputs = [state.Clone().DoMove(move).to_inputs(state.playerToMove) for move in state.GetMoves()]
+        inputs = []
+        moves = []
+
+        for move in state.GetMoves():            
+            future_state = state.CloneAndRandomize(state.playerToMove)
+            future_state.DoMove(move)
+            if len(future_state.interrupt_moves) > 0:
+                best_pred = 0
+                for second_move in future_state.GetMoves():
+                    second_future_state = future_state.CloneAndRandomize(state.playerToMove)
+                    second_future_state.DoMove(second_move)
+                    pred = self.estimator.predict([second_future_state.to_inputs(state.playerToMove)], verbose=0)
+                    if pred > best_pred:
+                        best_pred = pred
+                prediction = best_pred
+            else:
+                #inputs.append(future_state.to_inputs(state.playerToMove))
+                #moves.appepnd(move)
+                prediction = self.estimator.predict([future_state.to_inputs(state.playerToMove)], verbose=0)
+            print(f"[M:{move}   {best_val*100:.1f}%")
+            if prediction > best_val or best_move is None:
+                best_val = prediction
+                best_move = move
+                
+        print(f"\nBest Move: {best_move} ({best_val*100:.1f}%)\n")
+        return best_move
+        
+        index = 0
+        for prediction in self.estimator.predict(inputs, verbose=0):
+            if prediction > best_val or best_move is None:
+                best_val = prediction
+                best_move = moves[index]    
+            index += 1
 
 class BoardZone:
     
@@ -774,21 +812,45 @@ class Villain:
         heroes = 0
         for zone in player_state.board:
             heroes += len(zone.heroes)
-        return player_state.power >= 25 and heroes <= 1
+        return player_state.power >= 15 and heroes <= 1
+
+def encode_cards(state):
+    unique = []
+    cards = []
+    for player in state.players:
+        cards.extend(player.hand + player.deck_discard + player.deck)
+    for card in cards:
+        if card not in unique:
+            unique.append(card)
+    
+    unique = sorted(unique, key=operator.attrgetter('name'))
+    
+    encodings = {}
+    num = 0
+    for card in unique:
+        encodings[card.name] = num
+        num += 1
+    
+    print(encodings)
+    return encodings
 
 
 def main():
     # print("Villainous :)")
     
-    players = []
-    for i in range(0, 2):
-        player = PlayerState("AI" if i == 0 else f"Opponent {i}", hook.CaptainHook())#Villain())
-        #card = Card(0, "Peter Pan", CardType.HERO)
-        #card.strength = 8
-        #card.fate = True
-        #player.board[0].heroes.append(card)
-        players.append(player)
-    PlayGame(VillainousState(players))
+    agents = [RegressionAgent(), RegressionAgent()]#[ISMCTSAgent(iterations=500), ISMCTSAgent(iterations=500)]
+    wins = 0
+    for i in range(0, 100):
+        players = []
+        for i in range(0, 2):
+            player = PlayerState("ISMCTS" if i == 0 else f"Regression", Villain())
+            players.append(player)
+    
+        game = VillainousState(players)
+        game.card_encoding = encode_cards(game) 
+        if PlayGame(agents, game) == 0:
+            wins += 1
+    print(f"Wins: {wins}/100")
     return
     
     
