@@ -7,6 +7,7 @@ from monte import GameState, PlayGame, ISMCTS
 from itertools import chain, combinations
 import hook
 import operator
+import numpy as np
 
 VERBOSE_LOG = False
 
@@ -59,25 +60,7 @@ class VillainousState(GameState):
         st.interrupt_moves = deepcopy(self.interrupt_moves)
         st.phase = self.phase
         st.turn = self.turn
-        for player in self.players:
-            continue # TODO/NOTE: Have not tested thoroughly with this here
-            player.vanquish_history = deepcopy(player.vanquish_history)
-            player.hand = deepcopy(player.hand)
-            player.deck = deepcopy(player.deck)
-            player.deck_discard = deepcopy(player.deck_discard)
-            player.fate = deepcopy(player.fate)
-            player.fate_discard = deepcopy(player.fate_discard)
-            for zone in player.board:
-                zone.allies = deepcopy(zone.allies)
-                zone.heroes = deepcopy(zone.heroes)
-                zone.items = deepcopy(zone.items)
-                
-                
-            #player.fate = deepcopy(player.fate)
-            #player.fate_discard = deepcopy(player.fate_discard)
-            #player.hand = deepcopy(player.hand)
-            #player.deck = deepcopy(player.deck)
-            #player.deck_discard = deepcopy(player.deck_discard)
+
         return st
     
     def CloneAndRandomize(self, observer):
@@ -92,13 +75,13 @@ class VillainousState(GameState):
         for player in st.players:
             if player != st.players[observer]:
                 #print(f"Shuffling data for {player.identifier}")
-                unseenCards = deepcopy(player.deck) + deepcopy(player.hand)
+                unseenCards = player.deck + player.hand#deepcopy(player.deck) + deepcopy(player.hand)
                 random.shuffle(unseenCards)
                 numCards = len(player.hand)
                 # The first numCards unseen cards are the new hand
-                player.hand = deepcopy(unseenCards[:numCards])
+                player.hand = unseenCards[:numCards] #deepcopy(unseenCards[:numCards])
                 # The rest are the new deck
-                player.deck = deepcopy(unseenCards[numCards:])   
+                player.deck = unseenCards[numCards:] #deepcopy(unseenCards[numCards:])   
                 random.shuffle(player.fate)
 
         
@@ -144,7 +127,7 @@ class VillainousState(GameState):
     def EndPlayerTurn(self):
         player = self.players[self.playerToMove]
         player.first_turn = False
-        while len(player.hand) < 4:
+        for i in range(0, 4 - len(player.hand)): #while len(player.hand) < 4:        
             player.draw_card()
         self.playerToMove = self.GetNextPlayer(self.playerToMove)
         if self.players[self.playerToMove].first_turn:
@@ -173,12 +156,14 @@ class VillainousState(GameState):
                 moves.append(MoveZoneMove(zone))
           
         elif self.phase == self.ACTION_PHASE:
-            actions_remaining = []
-            for action in player.board_position.available_actions():
-                if action not in self.actions_used:
-                    actions_remaining.append(action)
+            actions_remaining = [action for action in player.board_position.available_actions() if action not in self.actions_used]
+            #for action in player.board_position.available_actions():
+                #if action not in self.actions_used:
+                    #actions_remaining.append(action)
+            calculated_playable_cards = False
             for action in actions_remaining:            
-                if type(action) is PlayCardAction:
+                if type(action) is PlayCardAction and not calculated_playable_cards: #TODO: maybe not a needed optimization
+                    calculated_playable_cards = True
                     for card in player.hand:
                         if card.cost <= player.power:
                             if card.targeted:
@@ -287,7 +272,9 @@ class VillainousState(GameState):
         return str(self)
 
     def to_inputs(self, player_number):
-        num_cards = len(self.card_encoding)
+        num_cards = len(self.card_encoding)# - 1
+        #num_hand_cards = self.card_encoding["non_fate"]
+        #print(f"Num cards: {num_cards}, non-fate: {num_hand_cards}")
         player = self.players[player_number]
         
         inputs = [1 if player_number == self.playerToMove else 0, player.power]
@@ -296,12 +283,22 @@ class VillainousState(GameState):
             inputs.append(1 if zone.locked else 0)
         
         sorted_hand = sorted(player.hand, key=operator.attrgetter('name'))
-        
+        sorted_discard = sorted(player.deck_discard, key=operator.attrgetter('name'))
+
+        # One-hot encode the cards in the hand
         for i in range(0, 4):
-            # One-hot encode the card
             card_inputs = [0] * num_cards
             if i < len(sorted_hand):
                 card = sorted_hand[i]
+                card_inputs[self.card_encoding[card.name]] = 1           
+            inputs.extend(card_inputs)
+        
+                
+        # One-hot encode the cards in the discard pile
+        for i in range(0, 30):
+            card_inputs = [0] * num_cards
+            if i < len(sorted_discard):
+                card = sorted_discard[i]
                 card_inputs[self.card_encoding[card.name]] = 1           
             inputs.extend(card_inputs)
         
@@ -310,6 +307,15 @@ class VillainousState(GameState):
                 inputs.extend([1 if other_player == self.players[self.playerToMove] else 0, other_player.power])     
                 for zone in other_player.board:
                     inputs.append(1 if zone.locked else 0)
+                
+                # One-hot encode the cards in the opponent's discard pile
+                sorted_discard = sorted(other_player.deck_discard, key=operator.attrgetter('name'))
+                for i in range(0, 30):
+                    card_inputs = [0] * num_cards
+                    if i < len(sorted_discard):
+                        card = sorted_discard[i]
+                        card_inputs[self.card_encoding[card.name]] = 1           
+                    inputs.extend(card_inputs)
         return inputs
 
 def gold_stash(p, gs):
@@ -348,9 +354,7 @@ class PlayerState:
         ]
         self.identifier = identifier
         self.hand = []
-        #self.deck = []
         self.deck_discard = []
-        #self.fate = []
         self.fate_discard = []
         
         self.vanquish_history = []
@@ -370,10 +374,10 @@ class PlayerState:
         self.can_stay_on_zone = False
         self.first_turn = True
         
-        self.deck = deepcopy(Villain.generate_deck())
+        self.deck = Villain.generate_deck() #deepcopy(Villain.generate_deck())
         random.shuffle(self.deck)
         
-        self.fate = deepcopy(Villain.generate_fate())
+        self.fate = Villain.generate_fate() #deepcopy(Villain.generate_fate())
         random.shuffle(self.fate)
         
         for i in range(4):
@@ -395,9 +399,6 @@ class PlayerState:
             if (zone.number != self.board_position.number or self.can_stay_on_zone) and not zone.locked:
                 positions.append(zone)
         return positions
-    
-    def get_state_score(self):
-        return self.Villain.get_score(self)
     
     def has_won(self, game_state):
         return self.Villain.has_won(self, game_state)
@@ -424,66 +425,14 @@ class PlayerState:
         self.fate.remove(card)  
         return card        
 
-    def play_card(self, game_state, choice=-1):
-        zone = None
-        playable_cards = []
-        for card in self.hand:
-            if card.cost <= self.power:
-                playable_cards.append(card)
-        if len(playable_cards) == 0:
-            return None, None
-        if choice is not -1:
-            if choice[0] is None:
-                return None, None
-            for playable in playable_cards:
-                if playable.name == choice[0].name:
-                    card = playable
-                    break
-            if choice[1] is not None:
-                zone = self.board[choice[1].number]
-        else:
-            card = self.agent.pick_card(playable_cards, self, game_state)
- 
-        if card is None:
-            return None, None
-        if card not in playable_cards:
-            print("play_card wound up with a card that is not playable")
-            return None, None
-        if card.card_type is CardType.EFFECT or card.card_type is CardType.CONDITION:
-            self.deck_discard.append(card)
-        self.hand.remove(card)
-        self.power -= card.cost
-        self.turn_record.append(f"Playing {card.name}")
-        zone = card.play(self, game_state, zone=zone)
-        return card, zone
-
     def discard_card(self, card):
         self.deck_discard.append(card)
         self.hand.remove(card)
-        #self.turn_record.append(f"Discarded {card.name}")
-
-    def discard_action(self, game_state, choice=-1):
-        if choice is not -1:
-            if choice is [] or choice is None:
-                return None
-            discards = []
-            for discarded_card in choice:
-                for card in self.hand:
-                    if card.name == discarded_card.name and card not in discards:
-                        discards.append(card)
-        else:
-            discards = self.agent.pick_discards(self.hand, self, game_state)
-        for card in discards:
-            self.discard_card(card)
-        return discards
     
     def add_power(self, power):
         self.power += power
         if self.power < 0:
             self.power =0 
-
-    def print_state(self):
-        pass#print(f"Player {self.identifier}: {self.power} power, hand: {len(self.hand)}")
         
     def __eq__(self, other):
         return self.identifier == other.identifier# and self.power == other.power
@@ -505,10 +454,11 @@ class ISMCTSAgent(Agent):
         self.iterations = iterations
         self.rollout_agent = rollout_agent
 
-    def GetMove(self, state):
+    def GetMove(self, state, moves=None):
         m, node = ISMCTS(rootstate = state, itermax = self.iterations, verbose = False, rollout_agent=self.rollout_agent)
         print(f"Best Move: {m} ({(node.wins/node.visits)*100:.1f}%)\n")
         return m
+
 
 class RegressionAgent(Agent):
 
@@ -517,15 +467,16 @@ class RegressionAgent(Agent):
         self.estimator = None
         self.verbose = verbose
         
-    def GetMove(self, state):
+    def GetMove(self, state, moves=None):
         best_move = None
         best_val = 0
         
         #inputs = [state.Clone().DoMove(move).to_inputs(state.playerToMove) for move in state.GetMoves()]
         inputs = []
-        moves = []
-
-        for move in state.GetMoves():            
+        move_options = []
+        if not moves:
+            moves = state.GetMoves()
+        for move in moves:            
             future_state = state.CloneAndRandomize(state.playerToMove)
             future_state.DoMove(move)
             if len(future_state.interrupt_moves) > 0:
@@ -534,28 +485,28 @@ class RegressionAgent(Agent):
                     second_future_state = future_state.CloneAndRandomize(state.playerToMove)
                     second_future_state.DoMove(second_move)
                     inputs.append(second_future_state.to_inputs(state.playerToMove))
-                    moves.append(move)
+                    move_options.append(move)
                     
             else:
                 inputs.append(future_state.to_inputs(state.playerToMove))
-                moves.append(move)                          
+                move_options.append(move)                          
         
         printed_moves = []
         index = 0
-        predictions = self.estimator.predict(inputs, verbose=0)
-
+        predictions = self.estimator.model(np.array(inputs), training=False)#self.estimator.predict(inputs, verbose=0)       
         if len(inputs) == 1:
             predictions = [predictions]
         for prediction in predictions:
             if prediction > best_val or best_move is None:
                 best_val = prediction
-                best_move = moves[index]    
+                best_move = move_options[index]    
             if self.verbose:
-                print(f"[M:{moves[index]} {prediction*100:.1f}%")
+                #print(prediction)
+                print(f"[M:{move_options[index]})")# {prediction*100:.1f}%")
             index += 1            
         
         if self.verbose:
-            print(f"\nBest Move: {best_move} ({best_val*100:.1f}%)\n")
+            print(f"\nBest Move: {best_move}\n")# ({best_val*100:.1f}%)\n")
         return best_move
 
 class BoardZone:
@@ -577,8 +528,6 @@ class BoardZone:
         item_bonus = []
         for item in self.items:
             item_bonus.extend(item.actions_granted)
-        #for action in item_bonus:
-            #print(f"Bonus Action: {action}")
         if len(self.heroes) > 0:
             return self.actions + item_bonus
         return self.actions + self.actions_blockable + item_bonus
@@ -783,10 +732,10 @@ class Villain:
                 card.code = unlock_the_magic
             if card:
                 deck.append(card)
-        for i in range(1, 7):
-            card = Card(2, "Cannon", CardType.ITEM)
-            card.actions_granted.append(VanquishAction(number=-i))
-            deck.append(card)
+        #for i in range(1, 7):
+            #card = Card(2, "Cannon", CardType.ITEM)
+           # card.actions_granted.append(VanquishAction(number=-i))
+            #deck.append(card)
         return deck
     
     def generate_fate(self):
@@ -821,7 +770,7 @@ def encode_cards(state):
     unique = []
     cards = []
     for player in state.players:
-        cards.extend(player.hand + player.deck_discard + player.deck)
+        cards.extend(player.hand + player.deck_discard + player.deck + player.fate + player.fate_discard)
     for card in cards:
         if card not in unique:
             unique.append(card)
@@ -830,10 +779,14 @@ def encode_cards(state):
     
     encodings = {}
     num = 0
+    non_fate = 0
     for card in unique:
         encodings[card.name] = num
         num += 1
+        if not card.fate:
+            non_fate += 1
     
+    #encodings["non_fate"] = non_fate
     print(encodings)
     return encodings
 
@@ -841,16 +794,24 @@ def encode_cards(state):
 def main():
     # print("Villainous :)")
     
-    #agents = [ISMCTSAgent(iterations=50, rollout_agent=RegressionAgent(verbose=False)), ISMCTSAgent(iterations=500)]
+    #agents = [ISMCTSAgent(iterations=500, rollout_agent=RegressionAgent(verbose=False)), ISMCTSAgent(iterations=500)]
     agents = [ISMCTSAgent(iterations=500), RegressionAgent()]
+    #agents = [ISMCTSAgent(iterations=500), ISMCTSAgent(iterations=500)]
+    #agents = [ISMCTSAgent(iterations=500), Agent()]
+    #agents = [RegressionAgent(), Agent()]
+    #agents = [ISMCTSAgent(iterations=500, rollout_agent=RegressionAgent(verbose=False)), ISMCTSAgent(iterations=500)]
     wins = 0
+    first_wins = 0
+    second_wins = 0
     losses = 0
-    total_games = 1000
+    first_losses = 0
+    second_losses = 0
+    total_games = 500
     prev_start = 1
     for i in range(0, total_games):
         players = []
         for i in range(0, 2):
-            player = PlayerState("ISMCTS" if i == 0 else f"Regression", Villain())
+            player = PlayerState(f"Monte" if i == 0 else f"Reggie", Villain())
             players.append(player)
     
         game = VillainousState(players)
@@ -860,10 +821,22 @@ def main():
         print(f"{game.playerToMove} starts")
         if PlayGame(agents, game) == 0:
             wins += 1
+            if prev_start == 0:
+                first_wins += 1
+            else:
+                second_wins += 1
         else:
             losses += 1
+            if prev_start == 0:
+                first_losses += 1
+            else:
+                second_losses += 1
         print(f"Current Record: {wins}-{losses} ({wins+losses} games)")
-    print(f"\n Final Wins: {wins}-{losses} ({wins+losses} games)")
+        print(f"Going First: {first_wins}-{first_losses}  ({first_wins+first_losses} games)")
+        print(f"Going Second: {second_wins}-{second_losses}  ({second_wins+second_losses} games)")
+    print(f"\nFinal Record: {wins}-{losses} ({wins+losses} games)")
+    print(f"Going First: {first_wins}-{first_losses}  ({first_wins+first_losses} games)")
+    print(f"Going Second: {second_wins}-{second_losses}  ({second_wins+second_losses} games)")
     return
     
     
